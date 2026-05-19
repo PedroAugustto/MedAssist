@@ -1,0 +1,92 @@
+{
+  "usuarios": [
+    {
+      "id": "user-001",
+      "nome": "João Silva",
+      "tamanho_fonte": 2,
+      "modo_contraste": true,
+      "velocidade_leitura": 0.9
+    }
+  ],
+  "medicamentos": [
+    {
+      "id": "med-001",
+      "nome_comercial": "Dipirona",
+      "principio_ativo": "Metamizol Sódico",
+      "dosagem": "500mg",
+      "foto_uri": "file://images/dipirona_caixa.jpg",
+      "codigo_barras": "7891234567890",
+      "estoque_atual": 15,
+      "estoque_total": 20,
+      "resumo_bula": "Indicado para dor e febre. Tomar com água. Evitar se tiver alergia a pirazolonas.",
+      "status_tratamento": "ativo"
+    },
+    {
+      "id": "med-002",
+      "nome_comercial": "Amoxicilina",
+      "principio_ativo": "Amoxicilina Tri-hidratada",
+      "dosagem": "500mg",
+      "foto_uri": "file://images/amoxicilina_caixa.jpg",
+      "codigo_barras": "7890987654321",
+      "estoque_atual": 6,
+      "estoque_total": 21,
+      "resumo_bula": "Antibiótico para infecções bacterianas. Deve-se completar o ciclo de 7 dias.",
+      "status_tratamento": "ativo"
+    }
+  ],
+  "configuracao_alarmes": [
+    {
+      "id": "conf-001",
+      "medicamento_id": "med-001",
+      "frequencia_horas": 8,
+      "data_inicio": "2026-05-10T08:00:00Z",
+      "duracao_dias": 30,
+      "notificacao_ativa": true
+    },
+    {
+      "id": "conf-002",
+      "medicamento_id": "med-002",
+      "frequencia_horas": 12,
+      "data_inicio": "2026-05-10T08:00:00Z",
+      "duracao_dias": 7,
+      "notificacao_ativa": true
+    }
+  ],
+  "historico_doses": [
+    {
+      "id": "dose-001",
+      "medicamento_id": "med-001",
+      "horario_agendado": "2026-05-14T08:00:00Z",
+      "horario_realizado": "2026-05-14T08:05:00Z",
+      "status": "tomado"
+    },
+    {
+      "id": "dose-002",
+      "medicamento_id": "med-002",
+      "horario_agendado": "2026-05-14T08:00:00Z",
+      "horario_realizado": "2026-05-14T08:10:00Z",
+      "status": "tomado"
+    },
+    {
+      "id": "dose-003",
+      "medicamento_id": "med-001",
+      "horario_agendado": "2026-05-14T16:00:00Z",
+      "horario_realizado": "2026-05-14T16:02:00Z",
+      "status": "tomado"
+    },
+    {
+      "id": "dose-004",
+      "medicamento_id": "med-002",
+      "horario_agendado": "2026-05-14T23:30:00Z",
+      "horario_realizado": null,
+      "status": "pendente"
+    },
+    {
+      "id": "dose-005",
+      "medicamento_id": "med-001",
+      "horario_agendado": "2026-05-15T00:00:00Z",
+      "horario_realizado": null,
+      "status": "pendente"
+    }
+  ]
+}

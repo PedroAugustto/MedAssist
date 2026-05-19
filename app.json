@@ -30,7 +30,9 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "expo-barcode-scanner",
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true
