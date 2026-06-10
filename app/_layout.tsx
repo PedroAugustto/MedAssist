@@ -7,6 +7,9 @@ import { useEffect } from 'react';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/components/useColorScheme';
+import { AccessibilitySettingsProvider } from '@/services/accessibilitySettings';
+import { initializeDatabase } from '@/services/database';
+import { configureMedicationNotifications } from '@/services/notifications';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -38,6 +41,15 @@ export default function RootLayout() {
     }
   }, [loaded]);
 
+  useEffect(() => {
+    initializeDatabase().catch((databaseError) => {
+      console.error('Erro ao inicializar o banco SQLite:', databaseError);
+    });
+    configureMedicationNotifications().catch((notificationError) => {
+      console.error('Erro ao configurar notificacoes:', notificationError);
+    });
+  }, []);
+
   if (!loaded) {
     return null;
   }
@@ -49,11 +61,13 @@ function RootLayoutNav() {
   const colorScheme = useColorScheme();
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-      </Stack>
-    </ThemeProvider>
+    <AccessibilitySettingsProvider>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <Stack>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+        </Stack>
+      </ThemeProvider>
+    </AccessibilitySettingsProvider>
   );
 }

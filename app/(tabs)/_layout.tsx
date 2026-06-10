@@ -42,7 +42,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Hoje",
+          title: "Doses",
           tabBarIcon: ({ color }) => (
             <TabBarIcon name="clock-o" color={color} />
           ),
@@ -61,6 +61,15 @@ export default function TabLayout() {
           title: "Chat",
           tabBarIcon: ({ color }) => (
             <TabBarIcon name="comments" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: "Config.",
+          tabBarIcon: ({ color }) => (
+            <TabBarIconMC name="account-cog" color={color} />
           ),
         }}
       />

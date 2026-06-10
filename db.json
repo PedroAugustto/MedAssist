@@ -2,91 +2,126 @@
   "usuarios": [
     {
       "id": "user-001",
-      "nome": "João Silva",
+      "nome": "Joao Silva",
+      "data_nascimento": "1948-03-12",
+      "peso_kg": 72,
+      "altura_cm": 168,
+      "sexo": "masculino",
+      "gestante": 0,
+      "lactante": 0,
+      "alergias": "Alergia a ibuprofeno",
+      "condicoes_saude": "Hipertensao; diabetes tipo 2",
+      "usa_outros_medicamentos": "Losartana 50mg; metformina 850mg",
+      "observacoes_clinicas": "Confirmar frequencia e duracao com receita ou profissional de saude.",
       "tamanho_fonte": 2,
-      "modo_contraste": true,
+      "modo_contraste": 1,
       "velocidade_leitura": 0.9
     }
   ],
   "medicamentos": [
     {
       "id": "med-001",
+      "usuario_id": "user-001",
       "nome_comercial": "Dipirona",
-      "principio_ativo": "Metamizol Sódico",
+      "principio_ativo": "Metamizol sodico",
       "dosagem": "500mg",
       "foto_uri": "file://images/dipirona_caixa.jpg",
-      "codigo_barras": "7891234567890",
-      "estoque_atual": 15,
-      "estoque_total": 20,
-      "resumo_bula": "Indicado para dor e febre. Tomar com água. Evitar se tiver alergia a pirazolonas.",
-      "status_tratamento": "ativo"
+      "status_tratamento": "ativo",
+      "criado_em": "2026-05-10T08:00:00Z"
     },
     {
       "id": "med-002",
+      "usuario_id": "user-001",
       "nome_comercial": "Amoxicilina",
-      "principio_ativo": "Amoxicilina Tri-hidratada",
+      "principio_ativo": "Amoxicilina tri-hidratada",
       "dosagem": "500mg",
       "foto_uri": "file://images/amoxicilina_caixa.jpg",
-      "codigo_barras": "7890987654321",
-      "estoque_atual": 6,
-      "estoque_total": 21,
-      "resumo_bula": "Antibiótico para infecções bacterianas. Deve-se completar o ciclo de 7 dias.",
-      "status_tratamento": "ativo"
+      "status_tratamento": "ativo",
+      "criado_em": "2026-05-10T08:10:00Z"
     }
   ],
-  "configuracao_alarmes": [
+  "planos_doses": [
     {
-      "id": "conf-001",
+      "id": "plano-001",
       "medicamento_id": "med-001",
+      "horario_inicio": "2026-05-10T08:00:00Z",
       "frequencia_horas": 8,
-      "data_inicio": "2026-05-10T08:00:00Z",
       "duracao_dias": 30,
-      "notificacao_ativa": true
+      "criar_alarmes": 1,
+      "notificacao_ativa": 1,
+      "criado_em": "2026-05-10T08:00:00Z"
     },
     {
-      "id": "conf-002",
+      "id": "plano-002",
       "medicamento_id": "med-002",
+      "horario_inicio": "2026-05-10T08:00:00Z",
       "frequencia_horas": 12,
-      "data_inicio": "2026-05-10T08:00:00Z",
       "duracao_dias": 7,
-      "notificacao_ativa": true
+      "criar_alarmes": 1,
+      "notificacao_ativa": 1,
+      "criado_em": "2026-05-10T08:10:00Z"
     }
   ],
   "historico_doses": [
     {
       "id": "dose-001",
+      "plano_dose_id": "plano-001",
       "medicamento_id": "med-001",
       "horario_agendado": "2026-05-14T08:00:00Z",
-      "horario_realizado": "2026-05-14T08:05:00Z",
-      "status": "tomado"
+      "status": "tomado",
+      "horario_tomado": "2026-05-14T08:05:00Z"
     },
     {
       "id": "dose-002",
+      "plano_dose_id": "plano-002",
       "medicamento_id": "med-002",
       "horario_agendado": "2026-05-14T08:00:00Z",
-      "horario_realizado": "2026-05-14T08:10:00Z",
-      "status": "tomado"
+      "status": "tomado",
+      "horario_tomado": "2026-05-14T08:10:00Z"
     },
     {
       "id": "dose-003",
+      "plano_dose_id": "plano-001",
       "medicamento_id": "med-001",
       "horario_agendado": "2026-05-14T16:00:00Z",
-      "horario_realizado": "2026-05-14T16:02:00Z",
-      "status": "tomado"
+      "status": "tomado",
+      "horario_tomado": "2026-05-14T16:02:00Z"
     },
     {
       "id": "dose-004",
+      "plano_dose_id": "plano-002",
       "medicamento_id": "med-002",
       "horario_agendado": "2026-05-14T23:30:00Z",
-      "horario_realizado": null,
-      "status": "pendente"
+      "status": "pendente",
+      "horario_tomado": null
     },
     {
       "id": "dose-005",
+      "plano_dose_id": "plano-001",
       "medicamento_id": "med-001",
       "horario_agendado": "2026-05-15T00:00:00Z",
-      "horario_realizado": null,
-      "status": "pendente"
+      "status": "pendente",
+      "horario_tomado": null
+    }
+  ],
+  "historico_chat": [
+    {
+      "id": "chat-001",
+      "usuario_id": "user-001",
+      "role": "model",
+      "text": "Ola, Joao! Como posso ajudar com seus remedios?",
+      "criado_em": "2026-05-14T07:55:00Z"
+    }
+  ],
+  "identificacoes_ia": [
+    {
+      "id": "ia-001",
+      "usuario_id": "user-001",
+      "medicamento_id": "med-001",
+      "foto_uri": "file://images/dipirona_caixa.jpg",
+      "resposta_json": "{\"nome_comercial\":\"Dipirona\",\"principio_ativo\":\"Metamizol sodico\",\"dosagem\":\"500mg\",\"frequencia_horas\":8,\"duracao_dias\":30}",
+      "confianca": 0.82,
+      "criado_em": "2026-05-10T07:58:00Z"
     }
   ]
 }
