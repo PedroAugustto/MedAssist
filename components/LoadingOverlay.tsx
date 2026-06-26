@@ -13,14 +13,17 @@ export default function LoadingOverlay({
   title = "Carregando",
   message = "Aguarde um instante.",
 }: LoadingOverlayProps) {
-  const { scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { scaleFont, colors } = useAccessibilitySettings();
+  const styles = useMemo(
+    () => createStyles(scaleFont, colors),
+    [scaleFont, colors],
+  );
 
   return (
     <Modal transparent visible={visible} animationType="fade">
       <View style={styles.backdrop}>
         <View style={styles.panel}>
-          <ActivityIndicator size="large" color="#007AFF" />
+          <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.message}>{message}</Text>
         </View>
@@ -29,7 +32,10 @@ export default function LoadingOverlay({
   );
 }
 
-const createStyles = (scaleFont: (size: number) => number) =>
+const createStyles = (
+  scaleFont: (size: number) => number,
+  colors: ReturnType<typeof useAccessibilitySettings>["colors"],
+) =>
   StyleSheet.create({
   backdrop: {
     flex: 1,
@@ -44,20 +50,20 @@ const createStyles = (scaleFont: (size: number) => number) =>
     alignItems: "center",
     borderRadius: 8,
     padding: 24,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.surface,
   },
   title: {
     marginTop: 16,
     fontSize: scaleFont(22),
     fontWeight: "800",
-    color: "#0F172A",
+    color: colors.text,
     textAlign: "center",
   },
   message: {
     marginTop: 8,
     fontSize: scaleFont(16),
     lineHeight: 23,
-    color: "#475569",
+    color: colors.textMuted,
     textAlign: "center",
   },
   });

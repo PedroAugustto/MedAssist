@@ -1,7 +1,4 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import DateTimePicker, {
-  DateTimePickerEvent,
-} from "@react-native-community/datetimepicker";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
@@ -13,7 +10,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -22,138 +18,118 @@ import {
 import {
   identifyMedicationFromImage,
   MedicationSuggestion,
-  searchMedicationDosageWithGrounding,
 } from "@/services/gemini";
 import {
+  identifyMedicationFromOcrText,
+  MedicationOcrSuggestion,
+} from "@/services/groq";
+import {
   findMedicationByCommercialName,
-  saveMedicationRegistration,
+  saveMedication as saveMedicationRecord,
 } from "@/services/database";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { useAccessibilitySettings } from "@/services/accessibilitySettings";
+import {
+  fetchAndSaveMedicationLeaflet,
+  getMedicationLeafletSafetyReview,
+} from "@/services/leaflets";
+import { extractTextFromMedicationImage } from "@/services/ocr";
+
+const ENABLE_GEMINI_IMAGE_FALLBACK = false;
 
 type FormState = {
   nome_comercial: string;
   principio_ativo: string;
   dosagem: string;
-  frequencia_horas: string;
-  duracao_dias: string;
-  horario_inicio: string;
-  criar_doses: boolean;
 };
 
-const toDatetimeLocalValue = (date: Date) => date.toISOString().slice(0, 16);
-
-const formatDateBr = (dateValue: string) => {
-  const date = new Date(dateValue);
-  if (Number.isNaN(date.getTime())) {
-    return "dd/mm/aaaa";
-  }
-
-  return date.toLocaleDateString("pt-BR");
-};
-
-const formatTimeBr = (dateValue: string) => {
-  const date = new Date(dateValue);
-  if (Number.isNaN(date.getTime())) {
-    return "--:--";
-  }
-
-  return date.toLocaleTimeString("pt-BR", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-};
-
-const mergeDatePart = (currentValue: string, selectedDate: Date) => {
-  const currentDate = new Date(currentValue);
-  const baseDate = Number.isNaN(currentDate.getTime()) ? new Date() : currentDate;
-  const nextDate = new Date(baseDate);
-
-  nextDate.setFullYear(selectedDate.getFullYear());
-  nextDate.setMonth(selectedDate.getMonth());
-  nextDate.setDate(selectedDate.getDate());
-
-  return toDatetimeLocalValue(nextDate);
-};
-
-const mergeTimePart = (currentValue: string, selectedDate: Date) => {
-  const currentDate = new Date(currentValue);
-  const baseDate = Number.isNaN(currentDate.getTime()) ? new Date() : currentDate;
-  const nextDate = new Date(baseDate);
-
-  nextDate.setHours(selectedDate.getHours());
-  nextDate.setMinutes(selectedDate.getMinutes());
-  nextDate.setSeconds(0);
-  nextDate.setMilliseconds(0);
-
-  return toDatetimeLocalValue(nextDate);
-};
-
-const numberOrNull = (value: string) => {
-  const normalized = value.trim().replace(",", ".");
-  if (!normalized) {
-    return null;
-  }
-
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-};
-
-const suggestionToForm = (suggestion: MedicationSuggestion): FormState => ({
-  nome_comercial: suggestion.nome_comercial || "",
+const suggestionToForm = (suggestion: MedicationOcrSuggestion): FormState => ({
+  nome_comercial: suggestion.nome_comercial || suggestion.principio_ativo || "",
   principio_ativo: suggestion.principio_ativo || "",
   dosagem: suggestion.dosagem || "",
-  frequencia_horas: suggestion.frequencia_horas
-    ? String(suggestion.frequencia_horas)
-    : "",
-  duracao_dias: suggestion.duracao_dias ? String(suggestion.duracao_dias) : "",
-  horario_inicio: toDatetimeLocalValue(new Date()),
-  criar_doses: true,
 });
 
 const emptyForm: FormState = {
   nome_comercial: "",
   principio_ativo: "",
   dosagem: "",
-  frequencia_horas: "",
-  duracao_dias: "",
-  horario_inicio: toDatetimeLocalValue(new Date()),
-  criar_doses: true,
 };
 
-const manualSuggestion: MedicationSuggestion = {
+const manualSuggestion: MedicationOcrSuggestion = {
+  medicamento_detectado: true,
   nome_comercial: null,
   principio_ativo: null,
   dosagem: null,
-  frequencia_horas: null,
-  duracao_dias: null,
   observacoes: null,
-  fontes: [],
   confianca: 0,
+  campos: {
+    nome_comercial: "nao_encontrado",
+    principio_ativo: "nao_encontrado",
+    dosagem: "nao_encontrado",
+  },
   rawResponse: "",
+};
+
+const geminiSuggestionToOcrSuggestion = (
+  suggestion: MedicationSuggestion,
+): MedicationOcrSuggestion => ({
+  medicamento_detectado: Boolean(
+    suggestion.nome_comercial || suggestion.principio_ativo,
+  ),
+  nome_comercial: suggestion.nome_comercial,
+  principio_ativo: suggestion.principio_ativo,
+  dosagem: suggestion.dosagem,
+  observacoes: suggestion.observacoes,
+  confianca: suggestion.confianca,
+  campos: {
+    nome_comercial: suggestion.nome_comercial
+      ? "extraido_da_embalagem"
+      : "nao_encontrado",
+    principio_ativo: suggestion.principio_ativo
+      ? "extraido_da_embalagem"
+      : "nao_encontrado",
+    dosagem: suggestion.dosagem ? "extraido_da_embalagem" : "nao_encontrado",
+  },
+  rawResponse: suggestion.rawResponse,
+});
+
+const fieldOriginLabel = (
+  origin: MedicationOcrSuggestion["campos"]["nome_comercial"],
+) => {
+  if (origin === "extraido_da_embalagem") {
+    return "extraido da embalagem";
+  }
+
+  if (origin === "inferido_pela_ia") {
+    return "inferido pela IA";
+  }
+
+  return "nao encontrado";
 };
 
 export default function NewMedicationScreen() {
   const cameraRef = useRef<CameraView>(null);
-  const { scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { scaleFont, colors } = useAccessibilitySettings();
+  const styles = useMemo(
+    () => createStyles(scaleFont, colors),
+    [scaleFont, colors],
+  );
   const [permission, requestPermission] = useCameraPermissions();
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [photoBase64, setPhotoBase64] = useState<string | null>(null);
-  const [suggestion, setSuggestion] = useState<MedicationSuggestion | null>(
+  const [suggestion, setSuggestion] = useState<MedicationOcrSuggestion | null>(
     null,
   );
+  const [ocrText, setOcrText] = useState("");
   const [form, setForm] = useState<FormState>(emptyForm);
   const [isTakingPhoto, setIsTakingPhoto] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isSearchingDosage, setIsSearchingDosage] = useState(false);
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isFetchingLeaflet, setIsFetchingLeaflet] = useState(false);
   const [isManualEntry, setIsManualEntry] = useState(false);
-  const [showStartDatePicker, setShowStartDatePicker] = useState(false);
-  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
 
-  const updateForm = (field: keyof FormState, value: string | boolean) => {
+  const updateForm = (field: keyof FormState, value: string) => {
     setForm((current) => ({
       ...current,
       [field]: value,
@@ -188,6 +164,7 @@ export default function NewMedicationScreen() {
     setPhotoUri(null);
     setPhotoBase64(null);
     setSuggestion(null);
+    setOcrText("");
     setForm(emptyForm);
     setIsManualEntry(false);
   };
@@ -209,6 +186,7 @@ export default function NewMedicationScreen() {
       setPhotoUri(asset.uri);
       setPhotoBase64(asset.base64 || null);
       setSuggestion(null);
+      setOcrText("");
       setForm(emptyForm);
       setIsManualEntry(false);
     } catch (error: any) {
@@ -222,22 +200,70 @@ export default function NewMedicationScreen() {
   };
 
   const analyzePhoto = async () => {
-    if (!photoBase64) {
+    if (!photoUri) {
       Alert.alert("Foto sem dados", "Tire a foto novamente para analisar.");
       return;
     }
 
     try {
       setIsAnalyzing(true);
-      const result = await identifyMedicationFromImage(photoBase64);
+      const ocrResult = await extractTextFromMedicationImage(photoUri);
+      setOcrText(ocrResult.text);
+      const result = await identifyMedicationFromOcrText(ocrResult.text);
+
+      if (
+        !result.medicamento_detectado ||
+        (!result.nome_comercial && !result.principio_ativo)
+      ) {
+        Alert.alert(
+          "Medicamento nao identificado",
+          result.observacoes ||
+            "Nao consegui identificar um medicamento nessa imagem. Tente outra foto ou preencha manualmente.",
+        );
+        setSuggestion(null);
+        setForm(emptyForm);
+        return;
+      }
+
       setSuggestion(result);
       setForm(suggestionToForm(result));
       setIsManualEntry(false);
     } catch (error: any) {
+      if (ENABLE_GEMINI_IMAGE_FALLBACK && photoBase64) {
+        try {
+          const fallbackResult = await identifyMedicationFromImage(photoBase64);
+          const normalizedFallback =
+            geminiSuggestionToOcrSuggestion(fallbackResult);
+
+          if (
+            !normalizedFallback.medicamento_detectado ||
+            (!normalizedFallback.nome_comercial &&
+              !normalizedFallback.principio_ativo)
+          ) {
+            throw new Error(
+              "Nao consegui identificar um medicamento nessa imagem.",
+            );
+          }
+
+          setSuggestion(normalizedFallback);
+          setForm(suggestionToForm(normalizedFallback));
+          setIsManualEntry(false);
+          return;
+        } catch (fallbackError: any) {
+          Alert.alert(
+            "Analise indisponivel",
+            fallbackError.message ||
+              "Nao conseguimos identificar o medicamento agora. Voce pode preencher manualmente.",
+          );
+          setForm(emptyForm);
+          return;
+        }
+      }
+
       Alert.alert(
         "Analise indisponivel",
         error.message ||
-          "Nao conseguimos identificar o medicamento agora. Voce pode preencher manualmente.",
+          "Nao consegui ler o texto da embalagem. Tente outra foto com mais luz ou preencha manualmente.",
       );
       setForm(emptyForm);
     } finally {
@@ -245,118 +271,21 @@ export default function NewMedicationScreen() {
     }
   };
 
-  const searchDosage = async () => {
-    if (!form.nome_comercial.trim() && !form.principio_ativo.trim()) {
-      Alert.alert(
-        "Informe o medicamento",
-        "Confirme pelo menos o nome comercial ou o principio ativo antes da busca.",
-      );
-      return;
-    }
-
-    try {
-      setIsSearchingDosage(true);
-      const result = await searchMedicationDosageWithGrounding({
-        nome_comercial: form.nome_comercial,
-        principio_ativo: form.principio_ativo,
-        dosagem: form.dosagem,
-      });
-
-      setForm((current) => ({
-        ...current,
-        frequencia_horas: result.frequencia_horas
-          ? String(result.frequencia_horas)
-          : current.frequencia_horas,
-        duracao_dias: result.duracao_dias
-          ? String(result.duracao_dias)
-          : current.duracao_dias,
-      }));
-      setSuggestion((current) => ({
-        nome_comercial: current?.nome_comercial || form.nome_comercial || null,
-        principio_ativo:
-          current?.principio_ativo || form.principio_ativo || null,
-        dosagem: current?.dosagem || form.dosagem || null,
-        frequencia_horas: result.frequencia_horas,
-        duracao_dias: result.duracao_dias,
-        observacoes: result.observacoes,
-        fontes: result.fontes,
-        confianca: result.confianca,
-        rawResponse: result.rawResponse,
-      }));
-    } catch (error: any) {
-      Alert.alert(
-        "Nao foi possivel retornar a posologia",
-        "A busca em fontes confiaveis falhou. Voce pode preencher a frequencia e a duracao manualmente ou salvar sem criar doses.",
-      );
-    } finally {
-      setIsSearchingDosage(false);
-    }
-  };
-
   const fillManually = () => {
     setSuggestion(manualSuggestion);
+    setOcrText("");
     setForm(emptyForm);
     setIsManualEntry(true);
   };
 
+  const saveMedication = async (skipDuplicateCheck = false) => {
+    const displayName =
+      form.nome_comercial.trim() || form.principio_ativo.trim();
 
-  const saveMedication = async (
-    skipDuplicateCheck = false,
-    skipDosagePrompt = false,
-  ) => {
-    if (!form.nome_comercial.trim()) {
-      Alert.alert("Nome obrigatorio", "Informe o nome comercial do remedio.");
-      return;
-    }
-
-    const frequenciaHoras = numberOrNull(form.frequencia_horas);
-    const duracaoDias = numberOrNull(form.duracao_dias);
-    const missingDosage = !frequenciaHoras || !duracaoDias;
-
-    if (missingDosage && !skipDosagePrompt) {
+    if (!displayName) {
       Alert.alert(
-        "Posologia nao informada",
-        "Deseja buscar a posologia em fontes confiaveis?",
-        [
-          {
-            text: "Nao",
-            style: "cancel",
-            onPress: () => {
-              if (form.criar_doses) {
-                Alert.alert(
-                  "Posologia obrigatoria",
-                  "Para criar doses, informe frequencia em horas e duracao em dias.",
-                );
-                return;
-              }
-
-              saveMedication(skipDuplicateCheck, true);
-            },
-          },
-          {
-            text: "Buscar",
-            onPress: () => {
-              searchDosage();
-            },
-          },
-        ],
-      );
-      return;
-    }
-
-    if (form.criar_doses && missingDosage) {
-      Alert.alert(
-        "Posologia obrigatoria",
-        "Para criar doses, informe frequencia em horas e duracao em dias.",
-      );
-      return;
-    }
-
-    const horarioInicio = new Date(form.horario_inicio);
-    if (Number.isNaN(horarioInicio.getTime())) {
-      Alert.alert(
-        "Horario invalido",
-        "Use o formato AAAA-MM-DDTHH:mm, por exemplo 2026-05-28T08:00.",
+        "Nome obrigatorio",
+        "Informe o nome comercial ou o principio ativo do remedio.",
       );
       return;
     }
@@ -365,7 +294,7 @@ export default function NewMedicationScreen() {
       setIsSaving(true);
       if (!skipDuplicateCheck) {
         const duplicate = await findMedicationByCommercialName(
-          form.nome_comercial,
+          displayName,
         );
 
         if (duplicate) {
@@ -377,7 +306,7 @@ export default function NewMedicationScreen() {
               { text: "Cancelar", style: "cancel" },
               {
                 text: "Cadastrar mesmo assim",
-                onPress: () => saveMedication(true, skipDosagePrompt),
+                onPress: () => saveMedication(true),
               },
             ],
           );
@@ -385,15 +314,11 @@ export default function NewMedicationScreen() {
         }
       }
 
-      await saveMedicationRegistration({
-        nome_comercial: form.nome_comercial,
+      const registration = await saveMedicationRecord({
+        nome_comercial: displayName,
         principio_ativo: form.principio_ativo || null,
         dosagem: form.dosagem || null,
         foto_uri: photoUri,
-        horario_inicio: horarioInicio.toISOString(),
-        frequencia_horas: frequenciaHoras,
-        duracao_dias: duracaoDias,
-        criar_doses: form.criar_doses,
         identificacao_ia: suggestion && !isManualEntry
           ? {
               resposta_json: suggestion.rawResponse,
@@ -402,9 +327,43 @@ export default function NewMedicationScreen() {
           : undefined,
       });
 
+      setIsFetchingLeaflet(true);
+      const leafletResult = await fetchAndSaveMedicationLeaflet(
+        registration.medicamentoId,
+      );
+      const safetyReview =
+        leafletResult.status === "baixada"
+          ? await getMedicationLeafletSafetyReview(registration.medicamentoId)
+          : null;
+      const leafletMessage =
+        leafletResult.status === "baixada"
+          ? `Resumo da bula salvo localmente. Fonte: ${leafletResult.fonteNome || "fonte confiavel"}.`
+          : "Medicamento salvo, mas nao encontrei uma fonte confiavel de bula agora.";
+
+      if (safetyReview?.alertas.length) {
+        Alert.alert(
+          "Possivel risco identificado",
+          `${leafletMessage}\n\n${safetyReview.alertas
+            .map(
+              (alert) =>
+                `${alert.titulo}: ${alert.dado_usuario_relacionado}`,
+            )
+            .join("\n")}\n\nAntes de usar ou criar doses, confirme com um medico ou farmaceutico.`,
+          [
+            { text: "Voltar", style: "cancel" },
+            {
+              text: "Continuar mesmo assim",
+              style: "destructive",
+              onPress: () => router.back(),
+            },
+          ],
+        );
+        return;
+      }
+
       Alert.alert(
         "Medicamento salvo",
-        "As informacoes foram registradas. Confira sempre com a receita ou um profissional de saude.",
+        `${leafletMessage} Confira sempre com a receita ou um profissional de saude.`,
         [{ text: "OK", onPress: () => router.back() }],
       );
     } catch (error: any) {
@@ -412,9 +371,10 @@ export default function NewMedicationScreen() {
         "Nao foi possivel salvar",
         error.message && !String(error.message).includes("NullPointer")
           ? error.message
-          : "Confira o medicamento, a frequencia e a duracao, depois tente novamente.",
+          : "Confira os dados do medicamento e tente novamente.",
       );
     } finally {
+      setIsFetchingLeaflet(false);
       setIsSaving(false);
     }
   };
@@ -501,15 +461,15 @@ export default function NewMedicationScreen() {
       <View style={styles.previewContainer}>
         <LoadingOverlay
           visible={isAnalyzing}
-          title="Lendo embalagem"
-          message="Extraindo nome, principio ativo e dosagem pela imagem."
+          title="Lendo texto da embalagem"
+          message="Usando OCR e IA para preencher nome, principio ativo e dosagem."
         />
         <Image source={{ uri: photoUri }} style={styles.previewImage} />
         <View style={styles.previewActions}>
           <Text style={styles.previewTitle}>Foto capturada</Text>
           <Text style={styles.warningText}>
-            Voce pode analisar a embalagem com IA ou preencher os dados
-            manualmente sem internet.
+            Voce pode ler o texto da embalagem por OCR ou preencher os dados
+            manualmente.
           </Text>
           <Pressable
             style={styles.primaryButton}
@@ -519,7 +479,7 @@ export default function NewMedicationScreen() {
             {isAnalyzing ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.primaryButtonText}>Analisar com IA</Text>
+              <Text style={styles.primaryButtonText}>Ler texto da embalagem</Text>
             )}
           </Pressable>
           <Pressable
@@ -541,16 +501,16 @@ export default function NewMedicationScreen() {
   return (
     <ScrollView style={styles.formScreen} contentContainerStyle={styles.form}>
       <LoadingOverlay
-        visible={isSaving || isSearchingDosage}
+        visible={isSaving || isFetchingLeaflet}
         title={
-          isSearchingDosage
-            ? "Buscando fontes confiaveis"
+          isFetchingLeaflet
+              ? "Salvando resumo da bula"
             : "Salvando medicamento"
         }
         message={
-          isSearchingDosage
-            ? "Consultando bula e posologia com ancoragem na Web."
-            : "Criando cadastro, plano e doses."
+          isFetchingLeaflet
+              ? "Buscando fonte confiavel e preparando resumo para o chat."
+            : "Criando cadastro do medicamento."
         }
       />
       <Image source={{ uri: photoUri }} style={styles.formImage} />
@@ -561,7 +521,7 @@ export default function NewMedicationScreen() {
       </Text>
 
       <FormField
-        label="Nome comercial"
+        label="Nome comercial ou principio ativo"
         value={form.nome_comercial}
         onChangeText={(value) => updateForm("nome_comercial", value)}
       />
@@ -575,80 +535,6 @@ export default function NewMedicationScreen() {
         value={form.dosagem}
         onChangeText={(value) => updateForm("dosagem", value)}
       />
-      <Pressable
-        style={styles.sourceSearchButton}
-        onPress={searchDosage}
-        disabled={isSearchingDosage}
-      >
-        <FontAwesome name="search" size={18} color="#FFFFFF" />
-        <Text style={styles.sourceSearchButtonText}>
-          Buscar posologia em fontes confiaveis
-        </Text>
-      </Pressable>
-      <DateTimeField
-        label="Horario inicial"
-        value={form.horario_inicio}
-        onDatePress={() => setShowStartDatePicker(true)}
-        onTimePress={() => setShowStartTimePicker(true)}
-      />
-      {showStartDatePicker ? (
-        <DateTimePicker
-          value={new Date(form.horario_inicio)}
-          mode="date"
-          display="calendar"
-          onChange={(event: DateTimePickerEvent, selectedDate?: Date) => {
-            setShowStartDatePicker(false);
-            if (event.type !== "dismissed" && selectedDate) {
-              updateForm(
-                "horario_inicio",
-                mergeDatePart(form.horario_inicio, selectedDate),
-              );
-            }
-          }}
-        />
-      ) : null}
-      {showStartTimePicker ? (
-        <DateTimePicker
-          value={new Date(form.horario_inicio)}
-          mode="time"
-          display="default"
-          is24Hour
-          onChange={(event: DateTimePickerEvent, selectedDate?: Date) => {
-            setShowStartTimePicker(false);
-            if (event.type !== "dismissed" && selectedDate) {
-              updateForm(
-                "horario_inicio",
-                mergeTimePart(form.horario_inicio, selectedDate),
-              );
-            }
-          }}
-        />
-      ) : null}
-      <FormField
-        label="Frequencia em horas"
-        value={form.frequencia_horas}
-        onChangeText={(value) => updateForm("frequencia_horas", value)}
-        keyboardType="numeric"
-      />
-      <FormField
-        label="Duracao em dias"
-        value={form.duracao_dias}
-        onChangeText={(value) => updateForm("duracao_dias", value)}
-        keyboardType="numeric"
-      />
-
-      <View style={styles.switchRow}>
-        <View style={styles.switchTextGroup}>
-          <Text style={styles.switchLabel}>Criar doses automaticamente</Text>
-          <Text style={styles.switchHelp}>
-            Usa horario inicial, frequencia e duracao confirmados acima.
-          </Text>
-        </View>
-        <Switch
-          value={form.criar_doses}
-          onValueChange={(value) => updateForm("criar_doses", value)}
-        />
-      </View>
 
       {suggestion.observacoes ? (
         <View style={styles.noteBox}>
@@ -657,14 +543,29 @@ export default function NewMedicationScreen() {
         </View>
       ) : null}
 
-      {suggestion.fontes.length > 0 ? (
+      {!isManualEntry ? (
         <View style={styles.noteBox}>
-          <Text style={styles.noteTitle}>Fontes consultadas</Text>
-          {suggestion.fontes.slice(0, 4).map((source) => (
-            <Text key={source.url} style={styles.sourceText}>
-              {source.titulo}
-            </Text>
-          ))}
+          <Text style={styles.noteTitle}>Origem dos campos</Text>
+          <Text style={styles.sourceText}>
+            Nome comercial: {fieldOriginLabel(suggestion.campos.nome_comercial)}
+          </Text>
+          <Text style={styles.sourceText}>
+            Principio ativo:{" "}
+            {fieldOriginLabel(suggestion.campos.principio_ativo)}
+          </Text>
+          <Text style={styles.sourceText}>
+            Dosagem: {fieldOriginLabel(suggestion.campos.dosagem)}
+          </Text>
+          <Text style={styles.sourceText}>
+            Confianca: {Math.round(suggestion.confianca * 100)}%
+          </Text>
+        </View>
+      ) : null}
+
+      {ocrText ? (
+        <View style={styles.noteBox}>
+          <Text style={styles.noteTitle}>Texto lido da embalagem</Text>
+          <Text style={styles.noteText}>{ocrText}</Text>
         </View>
       ) : null}
 
@@ -694,39 +595,6 @@ type FormFieldProps = {
   keyboardType?: "default" | "numeric";
 };
 
-type DateTimeFieldProps = {
-  label: string;
-  value: string;
-  onDatePress: () => void;
-  onTimePress: () => void;
-};
-
-function DateTimeField({
-  label,
-  value,
-  onDatePress,
-  onTimePress,
-}: DateTimeFieldProps) {
-  const { scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
-
-  return (
-    <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <View style={styles.dateTimeRow}>
-        <Pressable style={styles.dateInput} onPress={onDatePress}>
-          <Text style={styles.dateInputText}>{formatDateBr(value)}</Text>
-          <FontAwesome name="calendar" size={20} color="#007AFF" />
-        </Pressable>
-        <Pressable style={styles.timeInput} onPress={onTimePress}>
-          <Text style={styles.dateInputText}>{formatTimeBr(value)}</Text>
-          <FontAwesome name="clock-o" size={20} color="#007AFF" />
-        </Pressable>
-      </View>
-    </View>
-  );
-}
-
 function FormField({
   label,
   value,
@@ -734,8 +602,11 @@ function FormField({
   placeholder,
   keyboardType = "default",
 }: FormFieldProps) {
-  const { scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { scaleFont, colors } = useAccessibilitySettings();
+  const styles = useMemo(
+    () => createStyles(scaleFont, colors),
+    [scaleFont, colors],
+  );
 
   return (
     <View style={styles.field}>
@@ -746,32 +617,35 @@ function FormField({
         onChangeText={onChangeText}
         placeholder={placeholder}
         keyboardType={keyboardType}
-        placeholderTextColor="#64748B"
+        placeholderTextColor={colors.textMuted}
       />
     </View>
   );
 }
 
-const createStyles = (scaleFont: (size: number) => number) =>
+const createStyles = (
+  scaleFont: (size: number) => number,
+  colors: ReturnType<typeof useAccessibilitySettings>["colors"],
+) =>
   StyleSheet.create({
   centered: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.background,
   },
   permissionContainer: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.background,
   },
   permissionTitle: {
     marginTop: 16,
     fontSize: scaleFont(26),
     fontWeight: "800",
-    color: "#0F172A",
+    color: colors.text,
   },
   permissionText: {
     marginTop: 10,
@@ -779,7 +653,7 @@ const createStyles = (scaleFont: (size: number) => number) =>
     fontSize: scaleFont(18),
     lineHeight: 26,
     textAlign: "center",
-    color: "#334155",
+    color: colors.textMuted,
   },
   cameraContainer: {
     flex: 1,
@@ -875,7 +749,7 @@ const createStyles = (scaleFont: (size: number) => number) =>
   },
   previewContainer: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.background,
   },
   previewImage: {
     flex: 1,
@@ -888,11 +762,11 @@ const createStyles = (scaleFont: (size: number) => number) =>
   previewTitle: {
     fontSize: scaleFont(26),
     fontWeight: "800",
-    color: "#0F172A",
+    color: colors.text,
   },
   formScreen: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.surface,
   },
   form: {
     padding: 18,
@@ -909,13 +783,13 @@ const createStyles = (scaleFont: (size: number) => number) =>
   formTitle: {
     fontSize: scaleFont(28),
     fontWeight: "800",
-    color: "#0F172A",
+    color: colors.text,
     marginBottom: 10,
   },
   warningText: {
     fontSize: scaleFont(16),
     lineHeight: 23,
-    color: "#475569",
+    color: colors.textMuted,
     marginBottom: 12,
   },
   field: {
@@ -924,115 +798,40 @@ const createStyles = (scaleFont: (size: number) => number) =>
   fieldLabel: {
     fontSize: scaleFont(16),
     fontWeight: "700",
-    color: "#0F172A",
+    color: colors.text,
     marginBottom: 6,
-  },
-  sourceSearchButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    minHeight: 54,
-    marginTop: 16,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    backgroundColor: "#0B6623",
-  },
-  sourceSearchButtonText: {
-    flexShrink: 1,
-    fontSize: scaleFont(17),
-    fontWeight: "800",
-    color: "#FFFFFF",
-    textAlign: "center",
   },
   input: {
     minHeight: 54,
     borderWidth: 1,
-    borderColor: "#CBD5E1",
+    borderColor: colors.border,
     borderRadius: 8,
     paddingHorizontal: 14,
     fontSize: scaleFont(18),
-    color: "#0F172A",
-    backgroundColor: "#FFFFFF",
-  },
-  dateTimeRow: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  dateInput: {
-    flex: 1,
-    minHeight: 54,
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "#FFFFFF",
-  },
-  timeInput: {
-    width: 118,
-    minHeight: 54,
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "#FFFFFF",
-  },
-  dateInputText: {
-    fontSize: scaleFont(17),
-    color: "#0F172A",
-    fontWeight: "700",
-  },
-  switchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    marginTop: 18,
-    padding: 14,
-    borderRadius: 8,
-    backgroundColor: "#F8FAFC",
-  },
-  switchTextGroup: {
-    flex: 1,
-  },
-  switchLabel: {
-    fontSize: scaleFont(17),
-    fontWeight: "800",
-    color: "#0F172A",
-  },
-  switchHelp: {
-    marginTop: 4,
-    fontSize: scaleFont(14),
-    lineHeight: 20,
-    color: "#475569",
+    color: colors.text,
+    backgroundColor: colors.surface,
   },
   noteBox: {
     marginTop: 16,
     padding: 14,
     borderRadius: 8,
-    backgroundColor: "#EFF6FF",
+    backgroundColor: colors.surfaceMuted,
   },
   noteTitle: {
     fontSize: scaleFont(16),
     fontWeight: "800",
-    color: "#1D4ED8",
+    color: colors.text,
     marginBottom: 6,
   },
   noteText: {
     fontSize: scaleFont(15),
     lineHeight: 22,
-    color: "#1E3A8A",
+    color: colors.textMuted,
   },
   sourceText: {
     fontSize: scaleFont(14),
     lineHeight: 20,
-    color: "#1E3A8A",
+    color: colors.textMuted,
   },
   primaryButton: {
     minHeight: 56,
@@ -1054,12 +853,12 @@ const createStyles = (scaleFont: (size: number) => number) =>
     justifyContent: "center",
     paddingHorizontal: 18,
     borderWidth: 1,
-    borderColor: "#CBD5E1",
-    backgroundColor: "#FFFFFF",
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   secondaryButtonText: {
     fontSize: scaleFont(17),
     fontWeight: "700",
-    color: "#0F172A",
+    color: colors.text,
   },
   });

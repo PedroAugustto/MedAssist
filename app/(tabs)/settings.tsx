@@ -3,7 +3,9 @@ import DateTimePicker, {
   DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
 import Slider from "@react-native-community/slider";
+import { File, Paths } from "expo-file-system";
 import { useFocusEffect } from "expo-router";
+import * as Sharing from "expo-sharing";
 import React, { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -17,13 +19,15 @@ import {
   View,
 } from "react-native";
 
+import { useAccessibilitySettings } from "../../services/accessibilitySettings";
 import {
+  DoseHistoryWithMedication,
   getUserProfile,
+  listAllDoseHistory,
   saveUserProfile,
   UserProfile,
 } from "../../services/database";
 import { userFriendlyErrorMessage } from "../../services/errorMessages";
-import { useAccessibilitySettings } from "../../services/accessibilitySettings";
 
 type SettingsForm = {
   nome: string;
@@ -39,6 +43,7 @@ type SettingsForm = {
   observacoes_clinicas: string;
   tamanho_fonte: string;
   modo_contraste: boolean;
+  tema_escuro: boolean;
   velocidade_leitura: string;
 };
 
@@ -62,14 +67,15 @@ const profileToForm = (profile: UserProfile): SettingsForm => ({
   peso_kg: profile.peso_kg ? String(profile.peso_kg) : "",
   altura_cm: profile.altura_cm ? String(profile.altura_cm) : "",
   sexo: profile.sexo,
-  gestante: Boolean(profile.gestante),
-  lactante: Boolean(profile.lactante),
+  gestante: profile.sexo === "masculino" ? false : Boolean(profile.gestante),
+  lactante: profile.sexo === "masculino" ? false : Boolean(profile.lactante),
   alergias: profile.alergias || "",
   condicoes_saude: profile.condicoes_saude || "",
   usa_outros_medicamentos: profile.usa_outros_medicamentos || "",
   observacoes_clinicas: profile.observacoes_clinicas || "",
   tamanho_fonte: String(profile.tamanho_fonte ?? 2),
   modo_contraste: Boolean(profile.modo_contraste),
+  tema_escuro: Boolean(profile.tema_escuro),
   velocidade_leitura: String(profile.velocidade_leitura ?? 1),
 });
 
@@ -116,14 +122,72 @@ const toIsoDate = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
+const csvEscape = (value: unknown) => {
+  const text = value === null || value === undefined ? "" : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+};
+
+const formatCsvDateTime = (value: string | null) => {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const buildDoseHistoryCsv = (
+  doses: DoseHistoryWithMedication[],
+  userName: string,
+) => {
+  const metadataRows = [
+    ["usuario", userName || "Usuario MedAssist"],
+    ["exportado_em", formatCsvDateTime(new Date().toISOString())],
+    [],
+  ];
+  const headers = [
+    "medicamento",
+    "dosagem",
+    "status",
+    "horario_agendado",
+    "horario_tomado",
+    "observacao",
+  ];
+  const rows = doses.map((dose) => [
+    dose.nome_comercial,
+    dose.dosagem || "",
+    dose.status === "tomado" ? "Tomada" : "Atrasada/nao registrada",
+    formatCsvDateTime(dose.horario_agendado),
+    formatCsvDateTime(dose.horario_tomado),
+    dose.status === "tomado"
+      ? "Dose registrada como tomada."
+      : "Dose passada sem registro de tomada.",
+  ]);
+
+  return [...metadataRows, headers, ...rows]
+    .map((row) => row.map(csvEscape).join(","))
+    .join("\n");
+};
+
 export default function SettingsScreen() {
   const [userId, setUserId] = useState("user-001");
   const [form, setForm] = useState<SettingsForm | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isExportingDoseHistory, setIsExportingDoseHistory] = useState(false);
   const [showBirthDatePicker, setShowBirthDatePicker] = useState(false);
-  const { refreshSettings, scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { refreshSettings, scaleFont, colors } = useAccessibilitySettings();
+  const styles = useMemo(() => createStyles(scaleFont, colors), [scaleFont, colors]);
 
   const loadProfile = useCallback(async () => {
     try {
@@ -156,10 +220,17 @@ export default function SettingsScreen() {
   ) => {
     setForm((current) =>
       current
-        ? {
-            ...current,
-            [field]: value,
-          }
+        ? field === "sexo" && value === "masculino"
+          ? {
+              ...current,
+              sexo: value as UserProfile["sexo"],
+              gestante: false,
+              lactante: false,
+            }
+          : {
+              ...current,
+              [field]: value,
+            }
         : current,
     );
   };
@@ -176,7 +247,11 @@ export default function SettingsScreen() {
 
     const pesoKg = parseNumber(form.peso_kg);
     const alturaCm = parseNumber(form.altura_cm);
-    const velocidadeLeitura = clamp(parseNumber(form.velocidade_leitura) || 1, 0.1, 2);
+    const velocidadeLeitura = clamp(
+      parseNumber(form.velocidade_leitura) || 1,
+      0.1,
+      2,
+    );
     const tamanhoFonte = clamp(parseInteger(form.tamanho_fonte, 2), 1, 3);
 
     try {
@@ -188,14 +263,15 @@ export default function SettingsScreen() {
         peso_kg: pesoKg,
         altura_cm: alturaCm,
         sexo: form.sexo,
-        gestante: form.gestante ? 1 : 0,
-        lactante: form.lactante ? 1 : 0,
+        gestante: form.sexo === "masculino" ? 0 : form.gestante ? 1 : 0,
+        lactante: form.sexo === "masculino" ? 0 : form.lactante ? 1 : 0,
         alergias: form.alergias || null,
         condicoes_saude: form.condicoes_saude || null,
         usa_outros_medicamentos: form.usa_outros_medicamentos || null,
         observacoes_clinicas: form.observacoes_clinicas || null,
         tamanho_fonte: tamanhoFonte,
         modo_contraste: form.modo_contraste ? 1 : 0,
+        tema_escuro: form.tema_escuro ? 1 : 0,
         velocidade_leitura: velocidadeLeitura,
       });
       await refreshSettings();
@@ -208,6 +284,57 @@ export default function SettingsScreen() {
       );
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const exportDoseHistoryCsv = async () => {
+    try {
+      setIsExportingDoseHistory(true);
+      const now = new Date();
+      const doses = (await listAllDoseHistory(userId)).filter((dose) => {
+        const scheduledDate = new Date(dose.horario_agendado);
+
+        return (
+          dose.status === "tomado" ||
+          (!Number.isNaN(scheduledDate.getTime()) && scheduledDate < now)
+        );
+      });
+
+      if (doses.length === 0) {
+        Alert.alert(
+          "Sem historico",
+          "Ainda nao ha doses tomadas ou atrasadas para exportar.",
+        );
+        return;
+      }
+
+      const csv = buildDoseHistoryCsv(doses, form?.nome || "");
+      const file = new File(Paths.cache, "historico_doses_medassist.csv");
+
+      file.create({ overwrite: true });
+      file.write(csv);
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert(
+          "Compartilhamento indisponivel",
+          "Nao foi possivel abrir o compartilhamento neste dispositivo.",
+        );
+        return;
+      }
+
+      await Sharing.shareAsync(file.uri, {
+        mimeType: "text/csv",
+        dialogTitle: "Exportar historico de doses",
+        UTI: "public.comma-separated-values-text",
+      });
+    } catch (error) {
+      Alert.alert(
+        "Nao foi possivel exportar",
+        userFriendlyErrorMessage(error, "Tente exportar novamente."),
+      );
+    } finally {
+      setIsExportingDoseHistory(false);
     }
   };
 
@@ -276,10 +403,7 @@ export default function SettingsScreen() {
         {sexoOptions.map((sexo) => (
           <Pressable
             key={sexo}
-            style={[
-              styles.segment,
-              form.sexo === sexo && styles.segmentActive,
-            ]}
+            style={[styles.segment, form.sexo === sexo && styles.segmentActive]}
             onPress={() => updateForm("sexo", sexo)}
           >
             <Text
@@ -295,16 +419,20 @@ export default function SettingsScreen() {
       </View>
 
       <SectionTitle title="Cuidados" />
-      <SwitchRow
-        label="Gestante"
-        value={form.gestante}
-        onValueChange={(value) => updateForm("gestante", value)}
-      />
-      <SwitchRow
-        label="Lactante"
-        value={form.lactante}
-        onValueChange={(value) => updateForm("lactante", value)}
-      />
+      {form.sexo !== "masculino" ? (
+        <>
+          <SwitchRow
+            label="Gestante"
+            value={form.gestante}
+            onValueChange={(value) => updateForm("gestante", value)}
+          />
+          <SwitchRow
+            label="Lactante"
+            value={form.lactante}
+            onValueChange={(value) => updateForm("lactante", value)}
+          />
+        </>
+      ) : null}
       <FormField
         label="Alergias"
         value={form.alergias}
@@ -320,9 +448,7 @@ export default function SettingsScreen() {
       <FormField
         label="Outros medicamentos em uso"
         value={form.usa_outros_medicamentos}
-        onChangeText={(value) =>
-          updateForm("usa_outros_medicamentos", value)
-        }
+        onChangeText={(value) => updateForm("usa_outros_medicamentos", value)}
         multiline
       />
       <FormField
@@ -349,15 +475,35 @@ export default function SettingsScreen() {
         min={0.1}
         max={2}
         step={0.1}
-        onChange={(value) =>
-          updateForm("velocidade_leitura", value.toFixed(1))
-        }
+        onChange={(value) => updateForm("velocidade_leitura", value.toFixed(1))}
       />
       <SwitchRow
-        label="Modo contraste"
-        value={form.modo_contraste}
-        onValueChange={(value) => updateForm("modo_contraste", value)}
+        label="Tema escuro"
+        value={form.tema_escuro}
+        onValueChange={(value) => updateForm("tema_escuro", value)}
       />
+
+      <SectionTitle title="Dados" />
+      <Pressable
+        style={styles.exportButton}
+        onPress={exportDoseHistoryCsv}
+        disabled={isExportingDoseHistory}
+      >
+        {isExportingDoseHistory ? (
+          <ActivityIndicator color="#FFFFFF" />
+        ) : (
+          <>
+            <MaterialCommunityIcons
+              name="file-delimited-outline"
+              size={22}
+              color="#FFFFFF"
+            />
+            <Text style={styles.exportButtonText}>
+              Exportar historico de doses CSV
+            </Text>
+          </>
+        )}
+      </Pressable>
 
       <Pressable
         style={styles.saveButton}
@@ -390,8 +536,8 @@ type DateFieldProps = {
 };
 
 function DateField({ label, value, onPress }: DateFieldProps) {
-  const { scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { scaleFont, colors } = useAccessibilitySettings();
+  const styles = useMemo(() => createStyles(scaleFont, colors), [scaleFont, colors]);
 
   return (
     <View style={styles.field}>
@@ -414,8 +560,8 @@ function FormField({
   keyboardType = "default",
   multiline = false,
 }: FormFieldProps) {
-  const { scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { scaleFont, colors } = useAccessibilitySettings();
+  const styles = useMemo(() => createStyles(scaleFont, colors), [scaleFont, colors]);
 
   return (
     <View style={styles.field}>
@@ -428,15 +574,15 @@ function FormField({
         keyboardType={keyboardType}
         multiline={multiline}
         textAlignVertical={multiline ? "top" : "center"}
-        placeholderTextColor="#64748B"
+        placeholderTextColor={colors.textMuted}
       />
     </View>
   );
 }
 
 function SectionTitle({ title }: { title: string }) {
-  const { scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { scaleFont, colors } = useAccessibilitySettings();
+  const styles = useMemo(() => createStyles(scaleFont, colors), [scaleFont, colors]);
 
   return <Text style={styles.sectionTitle}>{title}</Text>;
 }
@@ -454,8 +600,8 @@ function DiscreteSlider({
   options,
   onChange,
 }: DiscreteSliderProps) {
-  const { scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { scaleFont, colors } = useAccessibilitySettings();
+  const styles = useMemo(() => createStyles(scaleFont, colors), [scaleFont, colors]);
   const currentIndex = Math.max(
     0,
     options.findIndex((option) => option.value === value),
@@ -472,9 +618,9 @@ function DiscreteSlider({
         minimumValue={0}
         maximumValue={options.length - 1}
         step={1}
-        minimumTrackTintColor="#007AFF"
-        maximumTrackTintColor="#CBD5E1"
-        thumbTintColor="#007AFF"
+        minimumTrackTintColor={colors.primary}
+        maximumTrackTintColor={colors.border}
+        thumbTintColor={colors.primary}
         onValueChange={(sliderValue) => {
           const nextOption = options[Math.round(sliderValue)];
           if (nextOption) {
@@ -521,8 +667,8 @@ function ContinuousSlider({
   step,
   onChange,
 }: ContinuousSliderProps) {
-  const { scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { scaleFont, colors } = useAccessibilitySettings();
+  const styles = useMemo(() => createStyles(scaleFont, colors), [scaleFont, colors]);
 
   return (
     <View style={styles.sliderGroup}>
@@ -535,9 +681,9 @@ function ContinuousSlider({
         minimumValue={min}
         maximumValue={max}
         step={step}
-        minimumTrackTintColor="#007AFF"
-        maximumTrackTintColor="#CBD5E1"
-        thumbTintColor="#007AFF"
+        minimumTrackTintColor={colors.primary}
+        maximumTrackTintColor={colors.border}
+        thumbTintColor={colors.primary}
         onValueChange={(sliderValue) =>
           onChange(Number(clamp(sliderValue, min, max).toFixed(1)))
         }
@@ -557,8 +703,8 @@ type SwitchRowProps = {
 };
 
 function SwitchRow({ label, value, onValueChange }: SwitchRowProps) {
-  const { scaleFont } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { scaleFont, colors } = useAccessibilitySettings();
+  const styles = useMemo(() => createStyles(scaleFont, colors), [scaleFont, colors]);
 
   return (
     <View style={styles.switchRow}>
@@ -568,192 +714,213 @@ function SwitchRow({ label, value, onValueChange }: SwitchRowProps) {
   );
 }
 
-const createStyles = (scaleFont: (size: number) => number) =>
+const createStyles = (
+  scaleFont: (size: number) => number,
+  colors: ReturnType<typeof useAccessibilitySettings>["colors"],
+) =>
   StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#FFFFFF",
-  },
-  content: {
-    padding: 16,
-    paddingTop: 50,
-    paddingBottom: 34,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#FFFFFF",
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: scaleFont(16),
-    color: "#475569",
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 22,
-  },
-  headerTextGroup: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  screenTitle: {
-    fontSize: scaleFont(28),
-    fontWeight: "800",
-    color: "#0F172A",
-  },
-  subtitle: {
-    marginTop: 4,
-    fontSize: scaleFont(16),
-    lineHeight: 23,
-    color: "#475569",
-  },
-  sectionTitle: {
-    marginTop: 18,
-    marginBottom: 6,
-    fontSize: scaleFont(20),
-    fontWeight: "800",
-    color: "#0F172A",
-  },
-  field: {
-    flex: 1,
-    marginTop: 12,
-  },
-  fieldLabel: {
-    fontSize: scaleFont(16),
-    fontWeight: "700",
-    color: "#0F172A",
-    marginBottom: 6,
-  },
-  input: {
-    minHeight: 54,
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    fontSize: scaleFont(17),
-    color: "#0F172A",
-    backgroundColor: "#FFFFFF",
-  },
-  dateInput: {
-    minHeight: 54,
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "#FFFFFF",
-  },
-  dateInputText: {
-    fontSize: scaleFont(17),
-    color: "#0F172A",
-  },
-  placeholderText: {
-    color: "#64748B",
-  },
-  multilineInput: {
-    minHeight: 92,
-    paddingTop: 12,
-  },
-  twoColumns: {
-    flexDirection: "row",
-    gap: 12,
-  },
-  segmentGroup: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    marginBottom: 4,
-  },
-  segment: {
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
-    borderRadius: 8,
-    justifyContent: "center",
-    paddingHorizontal: 12,
-  },
-  segmentActive: {
-    borderColor: "#007AFF",
-    backgroundColor: "#007AFF",
-  },
-  segmentText: {
-    fontSize: scaleFont(15),
-    fontWeight: "700",
-    color: "#334155",
-  },
-  segmentTextActive: {
-    color: "#FFFFFF",
-  },
-  switchRow: {
-    minHeight: 58,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    backgroundColor: "#F8FAFC",
-  },
-  sliderGroup: {
-    marginTop: 14,
-    padding: 14,
-    borderRadius: 8,
-    backgroundColor: "#F8FAFC",
-  },
-  sliderHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 12,
-  },
-  sliderValue: {
-    fontSize: scaleFont(16),
-    fontWeight: "800",
-    color: "#007AFF",
-  },
-  sliderOptions: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 8,
-  },
-  sliderOption: {
-    minHeight: 34,
-    justifyContent: "center",
-  },
-  sliderOptionText: {
-    fontSize: scaleFont(14),
-    fontWeight: "700",
-    color: "#64748B",
-  },
-  sliderOptionTextActive: {
-    color: "#007AFF",
-  },
-  sliderExtremes: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 4,
-  },
-  switchLabel: {
-    fontSize: scaleFont(17),
-    fontWeight: "700",
-    color: "#0F172A",
-  },
-  saveButton: {
-    minHeight: 56,
-    marginTop: 24,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#007AFF",
-  },
-  saveButtonText: {
-    fontSize: scaleFont(18),
-    fontWeight: "800",
-    color: "#FFFFFF",
-  },
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    content: {
+      padding: 16,
+      paddingTop: 50,
+      paddingBottom: 34,
+    },
+    loadingContainer: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.background,
+    },
+    loadingText: {
+      marginTop: 12,
+      fontSize: scaleFont(16),
+      color: colors.textMuted,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: 22,
+    },
+    headerTextGroup: {
+      flex: 1,
+      marginLeft: 12,
+    },
+    screenTitle: {
+      fontSize: scaleFont(28),
+      fontWeight: "800",
+      color: colors.text,
+    },
+    subtitle: {
+      marginTop: 4,
+      fontSize: scaleFont(16),
+      lineHeight: 23,
+      color: colors.textMuted,
+    },
+    sectionTitle: {
+      marginTop: 18,
+      marginBottom: 6,
+      fontSize: scaleFont(20),
+      fontWeight: "800",
+      color: colors.text,
+    },
+    field: {
+      flex: 1,
+      marginTop: 12,
+    },
+    fieldLabel: {
+      fontSize: scaleFont(16),
+      fontWeight: "700",
+      color: colors.text,
+      marginBottom: 6,
+    },
+    input: {
+      minHeight: 54,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      paddingHorizontal: 14,
+      fontSize: scaleFont(17),
+      color: colors.text,
+      backgroundColor: colors.surface,
+    },
+    dateInput: {
+      minHeight: 54,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      paddingHorizontal: 14,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      backgroundColor: colors.surface,
+    },
+    dateInputText: {
+      fontSize: scaleFont(17),
+      color: colors.text,
+    },
+    placeholderText: {
+      color: colors.textMuted,
+    },
+    multilineInput: {
+      minHeight: 92,
+      paddingTop: 12,
+    },
+    twoColumns: {
+      flexDirection: "row",
+      gap: 12,
+    },
+    segmentGroup: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+      marginBottom: 4,
+    },
+    segment: {
+      minHeight: 44,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      justifyContent: "center",
+      paddingHorizontal: 12,
+    },
+    segmentActive: {
+      borderColor: colors.primary,
+      backgroundColor: colors.primary,
+    },
+    segmentText: {
+      fontSize: scaleFont(15),
+      fontWeight: "700",
+      color: colors.textMuted,
+    },
+    segmentTextActive: {
+      color: "#FFFFFF",
+    },
+    switchRow: {
+      minHeight: 58,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginTop: 10,
+      paddingHorizontal: 14,
+      borderRadius: 8,
+      backgroundColor: colors.surfaceMuted,
+    },
+    sliderGroup: {
+      marginTop: 14,
+      padding: 14,
+      borderRadius: 8,
+      backgroundColor: colors.surfaceMuted,
+    },
+    sliderHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 12,
+    },
+    sliderValue: {
+      fontSize: scaleFont(16),
+      fontWeight: "800",
+      color: colors.primary,
+    },
+    sliderOptions: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      marginTop: 8,
+    },
+    sliderOption: {
+      minHeight: 34,
+      justifyContent: "center",
+    },
+    sliderOptionText: {
+      fontSize: scaleFont(14),
+      fontWeight: "700",
+      color: colors.textMuted,
+    },
+    sliderOptionTextActive: {
+      color: colors.primary,
+    },
+    sliderExtremes: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      marginTop: 4,
+    },
+    switchLabel: {
+      fontSize: scaleFont(17),
+      fontWeight: "700",
+      color: colors.text,
+    },
+    exportButton: {
+      minHeight: 54,
+      marginTop: 12,
+      borderRadius: 8,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      paddingHorizontal: 16,
+      backgroundColor: "#0F766E",
+    },
+    exportButtonText: {
+      flexShrink: 1,
+      fontSize: scaleFont(17),
+      fontWeight: "800",
+      color: "#FFFFFF",
+      textAlign: "center",
+    },
+    saveButton: {
+      minHeight: 56,
+      marginTop: 24,
+      borderRadius: 8,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.primary,
+    },
+    saveButtonText: {
+      fontSize: scaleFont(18),
+      fontWeight: "800",
+      color: "#FFFFFF",
+    },
   });

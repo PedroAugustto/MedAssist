@@ -1,5 +1,6 @@
 import React from "react";
 import { StyleSheet, View, ViewStyle } from "react-native";
+import { useAccessibilitySettings } from "@/services/accessibilitySettings";
 
 interface CardProps {
   theme?: "default" | "secondary";
@@ -8,7 +9,10 @@ interface CardProps {
 }
 
 export default function Card({ theme = "default", children, style }: CardProps) {
-  const themeStyles = theme === "secondary" ? styles.cardSecondary : styles.cardDefault;
+  const { colors } = useAccessibilitySettings();
+  const styles = React.useMemo(() => createStyles(colors), [colors]);
+  const themeStyles =
+    theme === "secondary" ? styles.cardSecondary : styles.cardDefault;
 
   return (
     <View style={[themeStyles, style]}>
@@ -17,9 +21,12 @@ export default function Card({ theme = "default", children, style }: CardProps) 
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (
+  colors: ReturnType<typeof useAccessibilitySettings>["colors"],
+) =>
+  StyleSheet.create({
   cardDefault: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.surface,
     borderRadius: 20,
     padding: 16,
     shadowColor: "#000",
@@ -29,7 +36,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   cardSecondary: {
-    backgroundColor: "#007AFF",
+    backgroundColor: colors.primary,
     borderRadius: 28,
     padding: 24,
     shadowColor: "#000",
@@ -38,4 +45,4 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     elevation: 5,
   },
-});
+  });

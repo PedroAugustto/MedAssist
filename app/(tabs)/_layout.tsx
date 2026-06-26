@@ -3,7 +3,7 @@ import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { Tabs } from "expo-router";
 import React from "react";
 
-import { useColorScheme } from "@/components/useColorScheme";
+import { useAccessibilitySettings } from "@/services/accessibilitySettings";
 
 // You can explore the built-in icon families and icons on the web at https://icons.expo.fyi/
 function TabBarIcon(props: {
@@ -23,17 +23,18 @@ function TabBarIconMC(props: {
 }
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
+  const { colors } = useAccessibilitySettings();
 
   return (
     <Tabs
       screenOptions={{
         tabBarStyle: {
-          backgroundColor: "#FFFFFF",
-          borderTopColor: "#007AFF",
+          backgroundColor: colors.tabBar,
+          borderTopColor: colors.primary,
           height: 70,
         },
-        tabBarActiveTintColor: "#007AFF",
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
         // Disable the static render of the header on web
         // to prevent a hydration error in React Navigation v6.
         headerShown: false,

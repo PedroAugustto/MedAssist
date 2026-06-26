@@ -38,3 +38,12 @@ export const cancelDoseNotifications = async (notificationIds: string[]) => {
   const nativeNotifications = await loadNativeNotifications();
   await nativeNotifications?.cancelDoseNotifications(notificationIds);
 };
+
+export const addDoseNotificationResponseListener = async (
+  onDoseNotificationPress: (doseId: string) => void,
+) => {
+  const nativeNotifications = await loadNativeNotifications();
+  return nativeNotifications?.addDoseNotificationResponseListener(
+    onDoseNotificationPress,
+  );
+};

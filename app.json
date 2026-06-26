@@ -22,7 +22,13 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "package": "com.chavestt.medAssist"
     },
     "web": {
       "bundler": "metro",
@@ -31,7 +37,6 @@
     },
     "plugins": [
       "expo-router",
-      "expo-barcode-scanner",
       [
         "expo-camera",
         {
@@ -50,6 +55,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "9c36c8d7-4fd4-4068-a5f3-30d9090cadf9"
+      }
     }
   }
 }

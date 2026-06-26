@@ -11,6 +11,7 @@ import * as Speech from "expo-speech";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -24,6 +25,7 @@ import {
 import { useAccessibilitySettings } from "../../services/accessibilitySettings";
 import {
   ChatHistoryMessage,
+  clearChatHistory,
   getUserProfile,
   listMedications,
   listChatHistory,
@@ -203,8 +205,11 @@ export default function ChatScreen() {
   const listRef = useRef<FlatList<ChatItem>>(null);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 250);
-  const { scaleFont, speechRate } = useAccessibilitySettings();
-  const styles = useMemo(() => createStyles(scaleFont), [scaleFont]);
+  const { scaleFont, speechRate, colors } = useAccessibilitySettings();
+  const styles = useMemo(
+    () => createStyles(scaleFont, colors),
+    [scaleFont, colors],
+  );
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [inputText, setInputText] = useState("");
   const [welcomeName, setWelcomeName] = useState("tudo bem");
@@ -444,6 +449,40 @@ export default function ChatScreen() {
     });
   };
 
+  const confirmClearChat = () => {
+    if (messages.length === 0 || isSending || isTranscribing || isRecording) {
+      return;
+    }
+
+    Alert.alert(
+      "Limpar conversa",
+      "Deseja apagar todo o historico deste chat?",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Limpar",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              Speech.stop();
+              setSpeakingMessageId(null);
+              await clearChatHistory();
+              setMessages([]);
+              setErrorMessage(null);
+            } catch (error) {
+              setErrorMessage(
+                userFriendlyErrorMessage(
+                  error,
+                  "Nao foi possivel limpar a conversa.",
+                ),
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const renderMessage = ({ item }: { item: ChatItem }) => {
     const isUser = item.role === "user";
     const isSpeaking = speakingMessageId === item.id;
@@ -509,6 +548,22 @@ export default function ChatScreen() {
           <Text style={styles.screenTitle}>Chat</Text>
           <Text style={styles.subtitle}>Converse com o MedAssist.</Text>
         </View>
+        <Pressable
+          style={[
+            styles.clearChatButton,
+            (messages.length === 0 || isSending || isTranscribing || isRecording) &&
+              styles.clearChatButtonDisabled,
+          ]}
+          onPress={confirmClearChat}
+          disabled={messages.length === 0 || isSending || isTranscribing || isRecording}
+          accessibilityLabel="Limpar conversa"
+        >
+          <MaterialCommunityIcons
+            name="trash-can-outline"
+            size={24}
+            color="#FFFFFF"
+          />
+        </Pressable>
       </View>
 
       <View style={styles.warningBox}>
@@ -573,7 +628,7 @@ export default function ChatScreen() {
           value={inputText}
           onChangeText={setInputText}
           placeholder="Digite sua pergunta"
-          placeholderTextColor="#64748B"
+          placeholderTextColor={colors.textMuted}
           multiline
           editable={!isSending && !isTranscribing && !isRecording}
           textAlignVertical="center"
@@ -617,11 +672,14 @@ export default function ChatScreen() {
   );
 }
 
-const createStyles = (scaleFont: (size: number) => number) =>
+const createStyles = (
+  scaleFont: (size: number) => number,
+  colors: ReturnType<typeof useAccessibilitySettings>["colors"],
+) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: "#FFFFFF",
+      backgroundColor: colors.background,
       paddingTop: 50,
     },
     header: {
@@ -639,12 +697,23 @@ const createStyles = (scaleFont: (size: number) => number) =>
     screenTitle: {
       fontSize: scaleFont(28),
       fontWeight: "800",
-      color: "#0F172A",
+      color: colors.text,
     },
     subtitle: {
       marginTop: 2,
       fontSize: scaleFont(16),
-      color: "#475569",
+      color: colors.textMuted,
+    },
+    clearChatButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 8,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "#B91C1C",
+    },
+    clearChatButtonDisabled: {
+      opacity: 0.45,
     },
     loadingContainer: {
       flex: 1,
@@ -654,7 +723,7 @@ const createStyles = (scaleFont: (size: number) => number) =>
     loadingText: {
       marginTop: 12,
       fontSize: scaleFont(16),
-      color: "#475569",
+      color: colors.textMuted,
     },
     messagesContent: {
       padding: 16,
@@ -671,14 +740,14 @@ const createStyles = (scaleFont: (size: number) => number) =>
     emptyTitle: {
       fontSize: scaleFont(24),
       fontWeight: "800",
-      color: "#0F172A",
+      color: colors.text,
       textAlign: "center",
     },
     emptyText: {
       marginTop: 8,
       fontSize: scaleFont(18),
       lineHeight: 26,
-      color: "#475569",
+      color: colors.textMuted,
       textAlign: "center",
     },
     messageBubble: {
@@ -694,7 +763,7 @@ const createStyles = (scaleFont: (size: number) => number) =>
     },
     assistantBubble: {
       alignSelf: "flex-start",
-      backgroundColor: "#F1F5F9",
+      backgroundColor: colors.surfaceMuted,
       borderWidth: 1,
       borderColor: "#E2E8F0",
     },
@@ -706,7 +775,7 @@ const createStyles = (scaleFont: (size: number) => number) =>
       color: "#FFFFFF",
     },
     assistantMessageText: {
-      color: "#0F172A",
+      color: colors.text,
     },
     listenButton: {
       alignSelf: "stretch",
@@ -724,7 +793,7 @@ const createStyles = (scaleFont: (size: number) => number) =>
     },
     listenButtonActive: {
       borderColor: "#007AFF",
-      backgroundColor: "#FFFFFF",
+      backgroundColor: colors.surface,
     },
     listenButtonText: {
       fontSize: scaleFont(14),
@@ -761,7 +830,7 @@ const createStyles = (scaleFont: (size: number) => number) =>
     },
     typingText: {
       fontSize: scaleFont(16),
-      color: "#475569",
+      color: colors.textMuted,
     },
     errorBox: {
       marginHorizontal: 16,
@@ -782,20 +851,20 @@ const createStyles = (scaleFont: (size: number) => number) =>
       gap: 10,
       padding: 16,
       paddingTop: 0,
-      backgroundColor: "#FFFFFF",
+      backgroundColor: colors.background,
     },
     input: {
       flex: 1,
       maxHeight: 118,
       minHeight: 54,
       borderWidth: 1,
-      borderColor: "#CBD5E1",
+      borderColor: colors.border,
       borderRadius: 8,
       paddingHorizontal: 14,
       paddingVertical: 12,
       fontSize: scaleFont(17),
-      color: "#0F172A",
-      backgroundColor: "#FFFFFF",
+      color: colors.text,
+      backgroundColor: colors.surface,
     },
     micButton: {
       width: 54,

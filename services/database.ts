@@ -23,6 +23,7 @@ export type UserProfile = {
   observacoes_clinicas: string | null;
   tamanho_fonte: number;
   modo_contraste: number;
+  tema_escuro: number;
   velocidade_leitura: number;
 };
 
@@ -30,17 +31,12 @@ export type UserProfileInput = Omit<UserProfile, "id"> & {
   id?: string;
 };
 
-export type MedicationRegistrationInput = {
+export type MedicationInput = {
   usuario_id?: string;
   nome_comercial: string;
   principio_ativo: string | null;
   dosagem: string | null;
   foto_uri: string | null;
-  horario_inicio: string;
-  frequencia_horas: number | null;
-  duracao_dias: number | null;
-  criar_doses: boolean;
-  notificacao_ativa?: boolean;
   identificacao_ia?: {
     resposta_json: string;
     confianca: number | null;
@@ -56,6 +52,57 @@ export type Medication = {
   foto_uri: string | null;
   status_tratamento: "ativo" | "pausado" | "finalizado";
   criado_em: string;
+};
+
+export type MedicationLeafletStatus =
+  | "baixada"
+  | "nao_encontrada"
+  | "erro";
+
+export type MedicationLeafletSourceType =
+  | "anvisa"
+  | "laboratorio"
+  | "bula"
+  | "outra";
+
+export type MedicationLeaflet = {
+  id: string;
+  medicamento_id: string;
+  usuario_id: string;
+  titulo: string;
+  fonte_nome: string;
+  fonte_url: string;
+  fonte_tipo: MedicationLeafletSourceType;
+  markdown: string;
+  hash_conteudo: string;
+  status: MedicationLeafletStatus;
+  baixado_em: string;
+  atualizado_em: string;
+};
+
+export type MedicationLeafletChunk = {
+  id: string;
+  bula_id: string;
+  medicamento_id: string;
+  secao: string;
+  texto: string;
+  ordem: number;
+};
+
+export type MedicationLeafletInput = {
+  medicamento_id: string;
+  usuario_id?: string;
+  titulo: string;
+  fonte_nome: string;
+  fonte_url: string;
+  fonte_tipo: MedicationLeafletSourceType;
+  markdown: string;
+  hash_conteudo: string;
+  status: MedicationLeafletStatus;
+  chunks: Array<{
+    secao: string;
+    texto: string;
+  }>;
 };
 
 export type MedicationUpdateInput = {
@@ -74,8 +121,10 @@ export type DoseHistoryWithMedication = {
   status: "pendente" | "tomado";
   horario_tomado: string | null;
   notificacao_id: string | null;
+  notificacao_atraso_id: string | null;
   nome_comercial: string;
   dosagem: string | null;
+  foto_uri: string | null;
 };
 
 export type ChatHistoryMessage = {
@@ -179,6 +228,7 @@ const createInitializedDatabase = async () => {
       observacoes_clinicas TEXT,
       tamanho_fonte INTEGER DEFAULT 2,
       modo_contraste INTEGER DEFAULT 0,
+      tema_escuro INTEGER DEFAULT 0,
       velocidade_leitura REAL DEFAULT 1.0,
       CHECK (sexo IN ('masculino', 'feminino', 'outro', 'nao_informado'))
     );
@@ -216,6 +266,7 @@ const createInitializedDatabase = async () => {
       status TEXT NOT NULL DEFAULT 'pendente',
       horario_tomado TEXT,
       notificacao_id TEXT,
+      notificacao_atraso_id TEXT,
       FOREIGN KEY (plano_dose_id) REFERENCES Planos_doses(id) ON DELETE SET NULL,
       FOREIGN KEY (medicamento_id) REFERENCES Medicamentos(id) ON DELETE CASCADE,
       CHECK (status IN ('pendente', 'tomado')),
@@ -244,6 +295,36 @@ const createInitializedDatabase = async () => {
       FOREIGN KEY (medicamento_id) REFERENCES Medicamentos(id) ON DELETE SET NULL
     );
 
+    CREATE TABLE IF NOT EXISTS Bulas_medicamentos (
+      id TEXT PRIMARY KEY NOT NULL,
+      medicamento_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      fonte_nome TEXT NOT NULL,
+      fonte_url TEXT NOT NULL,
+      fonte_tipo TEXT NOT NULL,
+      markdown TEXT NOT NULL,
+      hash_conteudo TEXT NOT NULL,
+      status TEXT NOT NULL,
+      baixado_em TEXT NOT NULL,
+      atualizado_em TEXT NOT NULL,
+      FOREIGN KEY (medicamento_id) REFERENCES Medicamentos(id) ON DELETE CASCADE,
+      FOREIGN KEY (usuario_id) REFERENCES Usuarios(id) ON DELETE CASCADE,
+      CHECK (fonte_tipo IN ('anvisa', 'laboratorio', 'bula', 'outra')),
+      CHECK (status IN ('baixada', 'nao_encontrada', 'erro'))
+    );
+
+    CREATE TABLE IF NOT EXISTS Bula_trechos (
+      id TEXT PRIMARY KEY NOT NULL,
+      bula_id TEXT NOT NULL,
+      medicamento_id TEXT NOT NULL,
+      secao TEXT NOT NULL,
+      texto TEXT NOT NULL,
+      ordem INTEGER NOT NULL,
+      FOREIGN KEY (bula_id) REFERENCES Bulas_medicamentos(id) ON DELETE CASCADE,
+      FOREIGN KEY (medicamento_id) REFERENCES Medicamentos(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_medicamentos_usuario
       ON Medicamentos(usuario_id);
     CREATE INDEX IF NOT EXISTS idx_planos_doses_medicamento
@@ -252,6 +333,10 @@ const createInitializedDatabase = async () => {
       ON Historico_doses(medicamento_id, horario_agendado);
     CREATE INDEX IF NOT EXISTS idx_historico_chat_usuario_criado
       ON Historico_chat(usuario_id, criado_em);
+    CREATE INDEX IF NOT EXISTS idx_bulas_medicamento
+      ON Bulas_medicamentos(medicamento_id);
+    CREATE INDEX IF NOT EXISTS idx_bula_trechos_medicamento
+      ON Bula_trechos(medicamento_id);
   `);
 
   await ensureColumn(db, "Usuarios", "data_nascimento", "TEXT");
@@ -266,8 +351,10 @@ const createInitializedDatabase = async () => {
   await ensureColumn(db, "Usuarios", "observacoes_clinicas", "TEXT");
   await ensureColumn(db, "Usuarios", "tamanho_fonte", "INTEGER DEFAULT 2");
   await ensureColumn(db, "Usuarios", "modo_contraste", "INTEGER DEFAULT 0");
+  await ensureColumn(db, "Usuarios", "tema_escuro", "INTEGER DEFAULT 0");
   await ensureColumn(db, "Usuarios", "velocidade_leitura", "REAL DEFAULT 1.0");
   await ensureColumn(db, "Historico_doses", "notificacao_id", "TEXT");
+  await ensureColumn(db, "Historico_doses", "notificacao_atraso_id", "TEXT");
 
   return db;
 };
@@ -312,18 +399,12 @@ export const generateDoseSchedule = (
   });
 };
 
-export const saveMedicationRegistration = async (
-  input: MedicationRegistrationInput,
-) => {
+export const saveMedication = async (input: MedicationInput) => {
   const db = await initializeDatabase();
   const now = new Date().toISOString();
   const usuarioId = input.usuario_id || DEFAULT_USER_ID;
   const medicamentoId = createId("med");
   const nomeComercial = input.nome_comercial?.trim() || "Medicamento sem nome";
-  const planoDoseId =
-    input.criar_doses && input.frequencia_horas && input.frequencia_horas > 0
-      ? createId("plano")
-      : null;
 
   await db.withTransactionAsync(async () => {
     await runAsync(
@@ -362,77 +443,6 @@ export const saveMedicationRegistration = async (
       ],
     );
 
-    if (planoDoseId && input.frequencia_horas) {
-      await runAsync(
-        db,
-        `INSERT INTO Planos_doses (
-          id,
-          medicamento_id,
-          horario_inicio,
-          frequencia_horas,
-          duracao_dias,
-          criar_alarmes,
-          notificacao_ativa,
-          criado_em
-        ) VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?);`,
-        [
-          planoDoseId,
-          medicamentoId,
-          input.horario_inicio,
-          input.frequencia_horas,
-          input.duracao_dias ?? "",
-          input.criar_doses ? 1 : 0,
-          input.notificacao_ativa === false ? 0 : 1,
-          now,
-        ],
-      );
-    }
-
-    if (
-      input.criar_doses &&
-      planoDoseId &&
-      input.frequencia_horas &&
-      input.duracao_dias
-    ) {
-      const doseDates = generateDoseSchedule(
-        input.horario_inicio,
-        input.frequencia_horas,
-        input.duracao_dias,
-      );
-
-      for (const horarioAgendado of doseDates) {
-        const doseId = createId("dose");
-        const notificacaoId = await scheduleDoseNotification({
-          medicamentoId,
-          doseId,
-          nomeComercial,
-          dosagem: input.dosagem,
-          horarioAgendado,
-        });
-
-        await runAsync(
-          db,
-          `INSERT OR IGNORE INTO Historico_doses (
-            id,
-            plano_dose_id,
-            medicamento_id,
-            horario_agendado,
-            status,
-            horario_tomado,
-            notificacao_id
-        ) VALUES (?, ?, ?, ?, ?, NULL, NULLIF(?, ''));`,
-        [
-          doseId,
-          planoDoseId,
-          medicamentoId,
-          horarioAgendado,
-          "pendente",
-          notificacaoId ?? "",
-        ],
-      );
-    }
-    }
-
     if (input.identificacao_ia) {
       await runAsync(
         db,
@@ -460,7 +470,6 @@ export const saveMedicationRegistration = async (
 
   return {
     medicamentoId,
-    planoDoseId,
   };
 };
 
@@ -507,7 +516,7 @@ export const createDosePlanForMedication = async (input: DosePlanInput) => {
   }
 
   const doseDates = generateDoseSchedule(
-    horarioInicio.toISOString(),
+    input.horario_inicio,
     input.frequencia_horas,
     input.duracao_dias,
   );
@@ -529,12 +538,12 @@ export const createDosePlanForMedication = async (input: DosePlanInput) => {
         notificacao_ativa,
         criado_em
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-      [
-        planoDoseId,
-        medicamentoId,
-        horarioInicio.toISOString(),
-        input.frequencia_horas,
-        input.duracao_dias,
+        [
+          planoDoseId,
+          medicamentoId,
+          input.horario_inicio,
+          input.frequencia_horas,
+          input.duracao_dias,
         input.criar_alarmes === false ? 0 : 1,
         input.notificacao_ativa === false ? 0 : 1,
         now,
@@ -543,7 +552,7 @@ export const createDosePlanForMedication = async (input: DosePlanInput) => {
 
     for (const horarioAgendado of doseDates) {
       const doseId = createId("dose");
-      const notificacaoId = await scheduleDoseNotification({
+      const notifications = await scheduleDoseNotification({
         medicamentoId,
         doseId,
         nomeComercial: medication.nome_comercial,
@@ -560,15 +569,17 @@ export const createDosePlanForMedication = async (input: DosePlanInput) => {
           horario_agendado,
           status,
           horario_tomado,
-          notificacao_id
-        ) VALUES (?, ?, ?, ?, ?, NULL, NULLIF(?, ''));`,
+          notificacao_id,
+          notificacao_atraso_id
+        ) VALUES (?, ?, ?, ?, ?, NULL, NULLIF(?, ''), NULLIF(?, ''));`,
         [
           doseId,
           planoDoseId,
           medicamentoId,
           horarioAgendado,
           "pendente",
-          notificacaoId ?? "",
+          notifications?.notificacaoId ?? "",
+          notifications?.notificacaoAtrasoId ?? "",
         ],
       );
     }
@@ -596,8 +607,10 @@ export const listDoseHistory = async (
       Historico_doses.status,
       Historico_doses.horario_tomado,
       Historico_doses.notificacao_id,
+      Historico_doses.notificacao_atraso_id,
       Medicamentos.nome_comercial,
-      Medicamentos.dosagem
+      Medicamentos.dosagem,
+      Medicamentos.foto_uri
     FROM Historico_doses
     INNER JOIN Medicamentos
       ON Medicamentos.id = Historico_doses.medicamento_id
@@ -612,6 +625,34 @@ export const listDoseHistory = async (
       )
     ORDER BY Historico_doses.horario_agendado ASC;`,
     [usuarioId, now],
+  );
+};
+
+export const listAllDoseHistory = async (
+  usuarioId: string = DEFAULT_USER_ID,
+): Promise<DoseHistoryWithMedication[]> => {
+  const db = await initializeDatabase();
+
+  return getAllAsync<DoseHistoryWithMedication>(
+    db,
+    `SELECT
+      Historico_doses.id,
+      Historico_doses.plano_dose_id,
+      Historico_doses.medicamento_id,
+      Historico_doses.horario_agendado,
+      Historico_doses.status,
+      Historico_doses.horario_tomado,
+      Historico_doses.notificacao_id,
+      Historico_doses.notificacao_atraso_id,
+      Medicamentos.nome_comercial,
+      Medicamentos.dosagem,
+      Medicamentos.foto_uri
+    FROM Historico_doses
+    INNER JOIN Medicamentos
+      ON Medicamentos.id = Historico_doses.medicamento_id
+    WHERE Medicamentos.usuario_id = ?
+    ORDER BY Historico_doses.horario_agendado ASC;`,
+    [usuarioId],
   );
 };
 
@@ -638,6 +679,185 @@ export const listMedications = async (
   );
 };
 
+export const findMedicationById = async (
+  id: string,
+): Promise<Medication | null> => {
+  const db = await initializeDatabase();
+
+  return getFirstAsync<Medication>(
+    db,
+    `SELECT
+      id,
+      usuario_id,
+      nome_comercial,
+      principio_ativo,
+      dosagem,
+      foto_uri,
+      status_tratamento,
+      criado_em
+    FROM Medicamentos
+    WHERE id = ?
+    LIMIT 1;`,
+    [id],
+  );
+};
+
+export const saveMedicationLeaflet = async (
+  input: MedicationLeafletInput,
+) => {
+  const db = await initializeDatabase();
+  const now = new Date().toISOString();
+  const usuarioId = input.usuario_id || DEFAULT_USER_ID;
+  const existing = await getFirstAsync<{ id: string }>(
+    db,
+    `SELECT id
+    FROM Bulas_medicamentos
+    WHERE medicamento_id = ?
+    LIMIT 1;`,
+    [input.medicamento_id],
+  );
+  const bulaId = existing?.id || createId("bula");
+
+  await db.withTransactionAsync(async () => {
+    if (existing) {
+      await runAsync(
+        db,
+        `UPDATE Bulas_medicamentos
+        SET
+          usuario_id = ?,
+          titulo = ?,
+          fonte_nome = ?,
+          fonte_url = ?,
+          fonte_tipo = ?,
+          markdown = ?,
+          hash_conteudo = ?,
+          status = ?,
+          atualizado_em = ?
+        WHERE id = ?;`,
+        [
+          usuarioId,
+          input.titulo,
+          input.fonte_nome,
+          input.fonte_url,
+          input.fonte_tipo,
+          input.markdown,
+          input.hash_conteudo,
+          input.status,
+          now,
+          bulaId,
+        ],
+      );
+      await runAsync(db, "DELETE FROM Bula_trechos WHERE bula_id = ?;", [
+        bulaId,
+      ]);
+    } else {
+      await runAsync(
+        db,
+        `INSERT INTO Bulas_medicamentos (
+          id,
+          medicamento_id,
+          usuario_id,
+          titulo,
+          fonte_nome,
+          fonte_url,
+          fonte_tipo,
+          markdown,
+          hash_conteudo,
+          status,
+          baixado_em,
+          atualizado_em
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          bulaId,
+          input.medicamento_id,
+          usuarioId,
+          input.titulo,
+          input.fonte_nome,
+          input.fonte_url,
+          input.fonte_tipo,
+          input.markdown,
+          input.hash_conteudo,
+          input.status,
+          now,
+          now,
+        ],
+      );
+    }
+
+    for (const [index, chunk] of input.chunks.entries()) {
+      await runAsync(
+        db,
+        `INSERT INTO Bula_trechos (
+          id,
+          bula_id,
+          medicamento_id,
+          secao,
+          texto,
+          ordem
+        ) VALUES (?, ?, ?, ?, ?, ?);`,
+        [
+          createId("trecho"),
+          bulaId,
+          input.medicamento_id,
+          chunk.secao,
+          chunk.texto,
+          index,
+        ],
+      );
+    }
+  });
+
+  return bulaId;
+};
+
+export const getMedicationLeafletByMedicationId = async (
+  medicamentoId: string,
+): Promise<MedicationLeaflet | null> => {
+  const db = await initializeDatabase();
+
+  return getFirstAsync<MedicationLeaflet>(
+    db,
+    `SELECT
+      id,
+      medicamento_id,
+      usuario_id,
+      titulo,
+      fonte_nome,
+      fonte_url,
+      fonte_tipo,
+      markdown,
+      hash_conteudo,
+      status,
+      baixado_em,
+      atualizado_em
+    FROM Bulas_medicamentos
+    WHERE medicamento_id = ?
+    LIMIT 1;`,
+    [medicamentoId],
+  );
+};
+
+export const listMedicationLeafletChunks = async (
+  medicamentoId: string,
+): Promise<MedicationLeafletChunk[]> => {
+  const db = await initializeDatabase();
+
+  return getAllAsync<MedicationLeafletChunk>(
+    db,
+    `SELECT
+      id,
+      bula_id,
+      medicamento_id,
+      secao,
+      texto,
+      ordem
+    FROM Bula_trechos
+    WHERE medicamento_id = ?
+    ORDER BY ordem ASC;`,
+    [medicamentoId],
+  );
+};
+
 export const listChatHistory = async (
   usuarioId: string = DEFAULT_USER_ID,
   limit: number = 60,
@@ -660,6 +880,16 @@ export const listChatHistory = async (
   );
 
   return rows.reverse();
+};
+
+export const clearChatHistory = async (
+  usuarioId: string = DEFAULT_USER_ID,
+) => {
+  const db = await initializeDatabase();
+
+  await runAsync(db, "DELETE FROM Historico_chat WHERE usuario_id = ?;", [
+    usuarioId,
+  ]);
 };
 
 export const saveChatMessage = async ({
@@ -693,9 +923,10 @@ export const saveChatMessage = async ({
       nome,
       tamanho_fonte,
       modo_contraste,
+      tema_escuro,
       velocidade_leitura
-    ) VALUES (?, ?, ?, ?, ?);`,
-    [usuario_id, "Usuario MedAssist", 2, 0, 1],
+    ) VALUES (?, ?, ?, ?, ?, ?);`,
+    [usuario_id, "Usuario MedAssist", 2, 0, 0, 1],
   );
 
   await runAsync(
@@ -774,13 +1005,19 @@ export const findMedicationByCommercialName = async (
 
 export const deleteMedication = async (id: string) => {
   const db = await initializeDatabase();
-  const notifications = await getAllAsync<{ notificacao_id: string | null }>(
+  const notifications = await getAllAsync<{
+    notificacao_id: string | null;
+    notificacao_atraso_id: string | null;
+  }>(
     db,
-    `SELECT notificacao_id
+    `SELECT notificacao_id, notificacao_atraso_id
     FROM Historico_doses
     WHERE medicamento_id = ?
       AND status = 'pendente'
-      AND NULLIF(notificacao_id, '') IS NOT NULL;`,
+      AND (
+        NULLIF(notificacao_id, '') IS NOT NULL
+        OR NULLIF(notificacao_atraso_id, '') IS NOT NULL
+      );`,
     [id],
   );
 
@@ -788,7 +1025,10 @@ export const deleteMedication = async (id: string) => {
   await runAsync(db, "DELETE FROM Medicamentos WHERE id = ?;", [id]);
   await cancelDoseNotifications(
     notifications
-      .map((notification) => notification.notificacao_id)
+      .flatMap((notification) => [
+        notification.notificacao_id,
+        notification.notificacao_atraso_id,
+      ])
       .filter((notificationId): notificationId is string =>
         Boolean(notificationId),
       ),
@@ -797,9 +1037,12 @@ export const deleteMedication = async (id: string) => {
 
 export const deleteDose = async (id: string) => {
   const db = await initializeDatabase();
-  const dose = await getFirstAsync<{ notificacao_id: string | null }>(
+  const dose = await getFirstAsync<{
+    notificacao_id: string | null;
+    notificacao_atraso_id: string | null;
+  }>(
     db,
-    `SELECT notificacao_id
+    `SELECT notificacao_id, notificacao_atraso_id
     FROM Historico_doses
     WHERE id = ?
     LIMIT 1;`,
@@ -808,9 +1051,58 @@ export const deleteDose = async (id: string) => {
 
   await runAsync(db, "DELETE FROM Historico_doses WHERE id = ?;", [id]);
 
-  if (dose?.notificacao_id) {
-    await cancelDoseNotifications([dose.notificacao_id]);
+  if (dose) {
+    await cancelDoseNotifications([
+      dose.notificacao_id || "",
+      dose.notificacao_atraso_id || "",
+    ]);
   }
+};
+
+export const markDoseAsTaken = async (id: string, horarioTomado?: string) => {
+  const db = await initializeDatabase();
+  const dose = await getFirstAsync<{
+    id: string;
+    notificacao_id: string | null;
+    notificacao_atraso_id: string | null;
+  }>(
+    db,
+    `SELECT id, notificacao_id, notificacao_atraso_id
+    FROM Historico_doses
+    WHERE id = ?
+    LIMIT 1;`,
+    [id],
+  );
+
+  if (!dose) {
+    throw new Error("Dose nao encontrada.");
+  }
+
+  const takenAt = horarioTomado ? new Date(horarioTomado) : new Date();
+
+  if (Number.isNaN(takenAt.getTime())) {
+    throw new Error("Horario de tomada invalido.");
+  }
+
+  await runAsync(
+    db,
+    `UPDATE Historico_doses
+    SET status = 'tomado',
+      horario_tomado = ?,
+      notificacao_id = NULL,
+      notificacao_atraso_id = NULL
+    WHERE id = ?;`,
+    [takenAt.toISOString(), id],
+  );
+
+  await cancelDoseNotifications([
+    dose.notificacao_id || "",
+    dose.notificacao_atraso_id || "",
+  ]);
+
+  return {
+    horario_tomado: takenAt.toISOString(),
+  };
 };
 
 export async function getUserProfile(
@@ -834,6 +1126,7 @@ export async function getUserProfile(
       observacoes_clinicas,
       tamanho_fonte,
       modo_contraste,
+      tema_escuro,
       velocidade_leitura
     FROM Usuarios
     WHERE id = ?
@@ -860,6 +1153,7 @@ export async function getUserProfile(
     observacoes_clinicas: null,
     tamanho_fonte: 2,
     modo_contraste: 0,
+    tema_escuro: 0,
     velocidade_leitura: 1,
   };
 
@@ -880,13 +1174,15 @@ export async function saveUserProfile(input: UserProfileInput) {
       nome,
       tamanho_fonte,
       modo_contraste,
+      tema_escuro,
       velocidade_leitura
-    ) VALUES (?, ?, ?, ?, ?);`,
+    ) VALUES (?, ?, ?, ?, ?, ?);`,
     [
       usuarioId,
       nome,
       input.tamanho_fonte ?? 2,
       input.modo_contraste ? 1 : 0,
+      input.tema_escuro ? 1 : 0,
       input.velocidade_leitura ?? 1,
     ],
   );
@@ -908,6 +1204,7 @@ export async function saveUserProfile(input: UserProfileInput) {
       observacoes_clinicas = NULLIF(?, ''),
       tamanho_fonte = ?,
       modo_contraste = ?,
+      tema_escuro = ?,
       velocidade_leitura = ?
     WHERE id = ?;`,
     [
@@ -924,6 +1221,7 @@ export async function saveUserProfile(input: UserProfileInput) {
       input.observacoes_clinicas?.trim() || "",
       input.tamanho_fonte ?? 2,
       input.modo_contraste ? 1 : 0,
+      input.tema_escuro ? 1 : 0,
       input.velocidade_leitura ?? 1,
       usuarioId,
     ],

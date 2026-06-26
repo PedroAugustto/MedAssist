@@ -1,6 +1,7 @@
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
-import React from "react";
+import React, { useMemo } from "react";
 import { Pressable, StyleSheet } from "react-native";
+import { useAccessibilitySettings } from "@/services/accessibilitySettings";
 
 type FloatingActionButtonProps = {
   onPress: () => void;
@@ -9,6 +10,9 @@ type FloatingActionButtonProps = {
 export default function FloatingActionButton({
   onPress,
 }: FloatingActionButtonProps) {
+  const { colors } = useAccessibilitySettings();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   return (
     <Pressable
       style={styles.fab}
@@ -20,7 +24,10 @@ export default function FloatingActionButton({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (
+  colors: ReturnType<typeof useAccessibilitySettings>["colors"],
+) =>
+  StyleSheet.create({
   fab: {
     position: "absolute",
     bottom: 24,
@@ -28,7 +35,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: "#007AFF",
+    backgroundColor: colors.primary,
     justifyContent: "center",
     alignItems: "center",
     shadowColor: "#000",
@@ -37,4 +44,4 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
   },
-});
+  });

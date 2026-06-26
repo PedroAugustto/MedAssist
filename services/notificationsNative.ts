@@ -53,6 +53,7 @@ export const scheduleDoseNotification = async ({
   if (Number.isNaN(scheduledDate.getTime()) || scheduledDate <= new Date()) {
     return null;
   }
+  const lateDate = new Date(scheduledDate.getTime() + 10 * 60 * 1000);
 
   try {
     const hasPermission = await ensureNotificationPermission();
@@ -60,7 +61,7 @@ export const scheduleDoseNotification = async ({
       return null;
     }
 
-    return await Notifications.scheduleNotificationAsync({
+    const notificacaoId = await Notifications.scheduleNotificationAsync({
       content: {
         title: "Hora de tomar o medicamento",
         body: `${nomeComercial}${dosagem ? ` - ${dosagem}` : ""}`,
@@ -77,6 +78,32 @@ export const scheduleDoseNotification = async ({
         channelId: DOSE_CHANNEL_ID,
       },
     });
+    const notificacaoAtrasoId =
+      lateDate > new Date()
+        ? await Notifications.scheduleNotificationAsync({
+            content: {
+              title: "Voce tem um remedio atrasado",
+              body: `${nomeComercial}${dosagem ? ` - ${dosagem}` : ""} ainda esta pendente.`,
+              sound: true,
+              data: {
+                doseId,
+                medicamentoId,
+                horarioAgendado,
+                tipo: "dose_atrasada",
+              },
+            },
+            trigger: {
+              type: Notifications.SchedulableTriggerInputTypes.DATE,
+              date: lateDate,
+              channelId: DOSE_CHANNEL_ID,
+            },
+          })
+        : null;
+
+    return {
+      notificacaoId,
+      notificacaoAtrasoId,
+    };
   } catch (error) {
     console.warn("Nao foi possivel agendar notificacao da dose:", error);
     return null;
@@ -91,4 +118,30 @@ export const cancelDoseNotifications = async (notificationIds: string[]) => {
       Notifications.cancelScheduledNotificationAsync(notificationId),
     ),
   );
+};
+
+export const addDoseNotificationResponseListener = (
+  onDoseNotificationPress: (doseId: string) => void,
+) => {
+  Notifications.getLastNotificationResponseAsync()
+    .then((response) => {
+      const doseId =
+        response?.notification.request.content.data?.doseId?.toString() || "";
+
+      if (doseId) {
+        onDoseNotificationPress(doseId);
+      }
+    })
+    .catch((error) => {
+      console.warn("Nao foi possivel ler a ultima notificacao:", error);
+    });
+
+  return Notifications.addNotificationResponseReceivedListener((response) => {
+    const doseId =
+      response.notification.request.content.data?.doseId?.toString() || "";
+
+    if (doseId) {
+      onDoseNotificationPress(doseId);
+    }
+  });
 };
