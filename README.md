@@ -1,6 +1,6 @@
 # MedAssist
 
-MedAssist e um aplicativo mobile desenvolvido com Expo e React Native para auxiliar idosos no acompanhamento de medicamentos e em duvidas simples sobre saude.
+MedAssist e um aplicativo mobile desenvolvido com Expo e React Native para auxiliar no acompanhamento de medicamentos e em duvidas simples sobre saude.
 
 O app permite cadastrar medicamentos, ler informacoes de embalagens por OCR, consultar resumos de bula em fontes confiaveis, conversar com um assistente por texto ou voz e manter dados de saude do usuario para respostas mais contextualizadas.
 
